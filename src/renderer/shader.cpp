@@ -129,16 +129,21 @@ void main() {
 in vec3 vWorldPos;
 out vec4 FragColor;
 void main() {
-    vec2 grid = abs(fract(vWorldPos.xz) - 0.5);
-    float line = min(grid.x, grid.y);
-    float alpha = 1.0 - smoothstep(0.0, 0.03, line);
-    alpha *= 0.3;
+    // Fade grid with distance from origin
+    float dist = length(vWorldPos.xz);
+    float fade = 1.0 - smoothstep(4.0, 10.0, dist);
 
-    // Axis highlights
-    if (abs(vWorldPos.x) < 0.03) { FragColor = vec4(0.3, 0.5, 0.9, 0.6); return; }
-    if (abs(vWorldPos.z) < 0.03) { FragColor = vec4(0.9, 0.3, 0.3, 0.6); return; }
+    // Axis highlights: X axis = red line along Z=0, Z axis = blue line along X=0
+    if (abs(vWorldPos.z) < 0.01 && abs(vWorldPos.x) > 0.01) {
+        FragColor = vec4(0.85, 0.25, 0.25, 0.8 * fade);
+        return;
+    }
+    if (abs(vWorldPos.x) < 0.01 && abs(vWorldPos.z) > 0.01) {
+        FragColor = vec4(0.25, 0.4, 0.85, 0.8 * fade);
+        return;
+    }
 
-    FragColor = vec4(0.5, 0.5, 0.5, alpha);
+    FragColor = vec4(0.35, 0.35, 0.38, 0.25 * fade);
 }
 )";
 

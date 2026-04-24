@@ -20,6 +20,9 @@ void ui_init(GLFWwindow* win)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = nullptr; // don't save layout
 
+    // Scale up font for readability
+    io.FontGlobalScale = 1.4f;
+
     ImGui_ImplGlfw_InitForOpenGL(win, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
@@ -168,15 +171,99 @@ void ui_top_bar(UIState& state)
         if (i < 2) ImGui::SameLine();
     }
 
-    // Undo/Redo — right side
-    float rightX = vp->Size.x - 140;
-    ImGui::SetCursorPos({rightX, 10});
+    // Right side icons: undo, redo, menu, more
+    float iconSize = 28.0f;
+    float iconGap = 8.0f;
+    float rightX = vp->Pos.x + vp->Size.x - (iconSize * 4 + iconGap * 3 + 16);
+    ImGui::SetCursorPos({rightX - vp->Pos.x, 10});
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImU32 iconCol = ImGui::GetColorU32({0.55f, 0.55f, 0.58f, 1.0f});
+    ImU32 iconHov = ImGui::GetColorU32({0.80f, 0.80f, 0.83f, 1.0f});
+
+    // Undo arrow — rounded open curve sweeping left with arrowhead at tip
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
-    if (ImGui::Button("Undo", {50, 28})) { /* TODO */ }
-    ImGui::SameLine();
-    if (ImGui::Button("Redo", {50, 28})) { /* TODO */ }
-    ImGui::PopStyleColor(2);
+    if (ImGui::Button("##undo", {iconSize, iconSize})) { /* TODO */ }
+    {
+        ImVec2 mn = ImGui::GetItemRectMin();
+        bool hov = ImGui::IsItemHovered();
+        ImU32 c = hov ? iconHov : iconCol;
+        float cx = mn.x + iconSize * 0.5f, cy = mn.y + iconSize * 0.5f;
+        float r = 8.0f;
+        // Arc: starts at bottom-right, sweeps over top to bottom-left
+        // Goes from ~-30deg (bottom-right) over the top to ~210deg (bottom-left)
+        float startAngle = -0.5f;   // just below right side
+        float endAngle   = 3.14f + 0.5f; // past the left side going down
+        dl->PathArcTo({cx, cy + 1}, r, startAngle, endAngle, 20);
+        dl->PathStroke(c, 0, 2.2f);
+        // Arrowhead at the end of the arc (bottom-left, pointing down-left)
+        float ax = cx + r * cosf(endAngle);
+        float ay = cy + 1 + r * sinf(endAngle);
+        dl->AddTriangleFilled(
+            {ax - 1, ay + 4},   // tip (pointing down)
+            {ax - 5, ay - 2},   // left wing
+            {ax + 3, ay - 1},   // right wing
+            c);
+    }
+
+    ImGui::SameLine(0, iconGap);
+
+    // Redo arrow — mirror of undo, sweeps right
+    if (ImGui::Button("##redo", {iconSize, iconSize})) { /* TODO */ }
+    {
+        ImVec2 mn = ImGui::GetItemRectMin();
+        bool hov = ImGui::IsItemHovered();
+        ImU32 c = hov ? iconHov : iconCol;
+        float cx = mn.x + iconSize * 0.5f, cy = mn.y + iconSize * 0.5f;
+        float r = 8.0f;
+        // Arc: from bottom-left, sweeps over top to bottom-right
+        float startAngle = 3.14f + 0.5f; // bottom-left
+        float endAngle   = -0.5f;        // bottom-right
+        // Draw reversed: from right going over top to left
+        dl->PathArcTo({cx, cy + 1}, r, 3.14f - (-0.5f), 3.14f - (3.14f + 0.5f), 20);
+        dl->PathStroke(c, 0, 2.2f);
+        // Arrowhead at bottom-right
+        float endA = 3.14f - (3.14f + 0.5f); // = -0.5
+        float ax = cx + r * cosf(endA);
+        float ay = cy + 1 + r * sinf(endA);
+        dl->AddTriangleFilled(
+            {ax + 1, ay + 4},   // tip
+            {ax + 5, ay - 2},   // right wing
+            {ax - 3, ay - 1},   // left wing
+            c);
+    }
+
+    ImGui::SameLine(0, iconGap);
+
+    // Hamburger menu (3 horizontal lines)
+    if (ImGui::Button("##menu", {iconSize, iconSize})) { /* TODO */ }
+    {
+        ImVec2 mn = ImGui::GetItemRectMin();
+        bool hov = ImGui::IsItemHovered();
+        ImU32 c = hov ? iconHov : iconCol;
+        float lx = mn.x + 6, rx = mn.x + iconSize - 6;
+        for (int i = 0; i < 3; i++) {
+            float ly = mn.y + 8 + i * 6;
+            dl->AddLine({lx, ly}, {rx, ly}, c, 2.0f);
+        }
+    }
+
+    ImGui::SameLine(0, iconGap);
+
+    // Three dots (vertical ellipsis)
+    if (ImGui::Button("##more", {iconSize, iconSize})) { /* TODO */ }
+    {
+        ImVec2 mn = ImGui::GetItemRectMin();
+        bool hov = ImGui::IsItemHovered();
+        ImU32 c = hov ? iconHov : iconCol;
+        float cx = mn.x + iconSize * 0.5f;
+        for (int i = 0; i < 3; i++) {
+            float cy = mn.y + 7 + i * 7;
+            dl->AddCircleFilled({cx, cy}, 2.0f, c);
+        }
+    }
+
+    ImGui::PopStyleColor();
 
     ImGui::End();
     ImGui::PopStyleColor(); // WindowBg
