@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.png" width="360" alt="Reflow">
+  <img src="icon.png" width="280" alt="Reflow">
 </p>
 
 <h1 align="center">Reflow</h1>
