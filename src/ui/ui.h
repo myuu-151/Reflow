@@ -34,7 +34,7 @@ struct UIState {
     SelectMode selectMode = SelectMode::Object;
     bool fileModified = false;
     std::string filename = "untitled.rflw";
-    float uiScale = 1.4f;
+    float uiScale = 2.5f;
 };
 
 void ui_init(GLFWwindow* win);

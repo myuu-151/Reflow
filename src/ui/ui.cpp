@@ -71,7 +71,7 @@ void ui_init(GLFWwindow* win)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = nullptr; // don't save layout
 
-    io.FontGlobalScale = 1.4f;
+    io.FontGlobalScale = 2.5f;
 
     // Default font
     static const ImWchar mainRanges[] = {
