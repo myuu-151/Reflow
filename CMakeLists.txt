@@ -30,13 +30,22 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PRIVATE glfw glad)
 
+# stb_image
+add_library(stb_image STATIC thirdparty/stb/stb_image.c)
+target_include_directories(stb_image PUBLIC thirdparty/stb)
+
 # Reflow sources
 file(GLOB_RECURSE REFLOW_SOURCES
     src/*.cpp
     src/*.c
 )
 
-add_executable(reflow ${REFLOW_SOURCES})
+# Windows resource file (exe icon)
+if(WIN32)
+    set(REFLOW_RC res/reflow.rc)
+endif()
+
+add_executable(reflow ${REFLOW_SOURCES} ${REFLOW_RC})
 
 target_include_directories(reflow PRIVATE
     src
@@ -44,9 +53,10 @@ target_include_directories(reflow PRIVATE
     thirdparty/glm
     thirdparty/imgui
     thirdparty/imgui/backends
+    thirdparty/stb
 )
 
-target_link_libraries(reflow PRIVATE glfw glad imgui)
+target_link_libraries(reflow PRIVATE glfw glad imgui stb_image)
 
 # Copy res/ to build output
 add_custom_command(TARGET reflow POST_BUILD

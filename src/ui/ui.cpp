@@ -2,7 +2,16 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include <glad/glad.h>
+#include <stb_image.h>
 #include <cstdio>
+#include <string>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace rf {
 
@@ -18,7 +27,31 @@ static constexpr const char* ICON_REDO      = "\xEE\x85\x9A"; // U+E15A
 static constexpr const char* ICON_MENU      = "\xEE\x97\x92"; // U+E5D2
 static constexpr const char* ICON_MORE_VERT = "\xEE\x97\x94"; // U+E5D4
 
+// Toolbar icons
+static constexpr const char* ICON_SELECT    = "\xEE\x97\x88"; // U+E5C8 near_me (cursor)
+static constexpr const char* ICON_MOVE      = "\xEE\xA2\x9F"; // U+E89F open_with (4-way arrows)
+static constexpr const char* ICON_ROTATE    = "\xEE\xA1\xA3"; // U+E863 autorenew (rotate)
+static constexpr const char* ICON_SCALE     = "\xEE\x8F\x82"; // U+E3C2 crop_free (square with corners)
+static constexpr const char* ICON_BOX       = "\xEE\xA0\x8E"; // U+E80E 3d_rotation (cube)
+
 static ImFont* g_iconFont = nullptr;
+static GLuint g_logoTexture = 0;
+static int g_logoW = 0, g_logoH = 0;
+
+// Resolve path relative to exe directory
+static std::string exe_relative(const char* relPath)
+{
+#ifdef _WIN32
+    char buf[MAX_PATH];
+    GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    std::string dir(buf);
+    auto pos = dir.find_last_of("\\/");
+    if (pos != std::string::npos) dir = dir.substr(0, pos + 1);
+    return dir + relPath;
+#else
+    return relPath;
+#endif
+}
 
 void ui_init(GLFWwindow* win)
 {
@@ -38,12 +71,28 @@ void ui_init(GLFWwindow* win)
     ImFontConfig iconCfg;
     iconCfg.PixelSnapH = true;
     iconCfg.GlyphMinAdvanceX = 20.0f;
-    g_iconFont = io.Fonts->AddFontFromFileTTF("res/MaterialIcons-Regular.ttf", 20.0f, &iconCfg, iconRanges);
+    std::string iconPath = exe_relative("res/MaterialIcons-Regular.ttf");
+    g_iconFont = io.Fonts->AddFontFromFileTTF(iconPath.c_str(), 20.0f, &iconCfg, iconRanges);
 
     ImGui_ImplGlfw_InitForOpenGL(win, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
     ui_apply_theme();
+
+    // Load logo icon as OpenGL texture
+    int w, h, channels;
+    std::string logoPath = exe_relative("res/reflow_icon.png");
+    unsigned char* pixels = stbi_load(logoPath.c_str(), &w, &h, &channels, 4);
+    if (pixels) {
+        glGenTextures(1, &g_logoTexture);
+        glBindTexture(GL_TEXTURE_2D, g_logoTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        g_logoW = w;
+        g_logoH = h;
+        stbi_image_free(pixels);
+    }
 }
 
 void ui_shutdown()
@@ -131,14 +180,20 @@ void ui_top_bar(UIState& state)
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    // Logo text
-    ImGui::SetCursorPos({12, 12});
+    // Logo icon + text
+    ImGui::SetCursorPos({10, 8});
+    if (g_logoTexture) {
+        float iconSz = 30.0f;
+        ImGui::Image((ImTextureID)(intptr_t)g_logoTexture, {iconSz, iconSz});
+        ImGui::SameLine(0, 6);
+        ImGui::SetCursorPosY(12);
+    }
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::accent());
     ImGui::Text("REFLOW");
     ImGui::PopStyleColor();
 
     // Filename
-    ImGui::SameLine(110);
+    ImGui::SameLine(130);
     ImGui::SetCursorPosY(14);
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
     ImGui::Text("|");
@@ -234,17 +289,17 @@ void ui_toolbar(UIState& state)
 
     struct ToolDef { Tool tool; const char* icon; const char* name; };
     ToolDef tools[] = {
-        {Tool::Select, "->", "Select"},
-        {Tool::Move,   "+",  "Move"},
-        {Tool::Rotate, "O",  "Rotate"},
-        {Tool::Scale,  "[]", "Scale"},
-        {Tool::Box,    "<>", "Box"},
+        {Tool::Select, ICON_SELECT, "Select"},
+        {Tool::Move,   ICON_MOVE,   "Move"},
+        {Tool::Rotate, ICON_ROTATE, "Rotate"},
+        {Tool::Scale,  ICON_SCALE,  "Scale"},
     };
 
     ImGui::SetCursorPosY(12);
     for (auto& t : tools) {
         bool active = (state.currentTool == t.tool);
         float btnW = kToolbarWidth - 24;
+        float btnH = 36.0f;
 
         if (active)
             ImGui::PushStyleColor(ImGuiCol_Button, Colors::accent());
@@ -252,8 +307,28 @@ void ui_toolbar(UIState& state)
             ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
 
         ImGui::SetCursorPosX(12);
-        if (ImGui::Button(t.name, {btnW, 36}))
+        ImVec2 btnPos = ImGui::GetCursorScreenPos();
+
+        char btnId[32];
+        snprintf(btnId, sizeof(btnId), "##tool_%s", t.name);
+        if (ImGui::Button(btnId, {btnW, btnH}))
             state.currentTool = t.tool;
+
+        // Draw icon + label over the button
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float iconX = btnPos.x + 10;
+        float textY = btnPos.y + (btnH - 20) * 0.5f;
+
+        ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text);
+
+        // Icon
+        if (g_iconFont) {
+            dl->AddText(g_iconFont, 20.0f, ImVec2(iconX, textY), textCol, t.icon);
+        }
+
+        // Label
+        float labelX = btnPos.x + 38;
+        dl->AddText(ImVec2(labelX, textY + 2), textCol, t.name);
 
         ImGui::PopStyleColor();
         ImGui::Spacing();

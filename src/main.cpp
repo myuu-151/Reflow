@@ -6,9 +6,17 @@
 #include "ui/ui.h"
 
 #include "imgui.h"
+#include <stb_image.h>
 
 #include <cstdio>
 #include <vector>
+#include <string>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // Globals
@@ -223,6 +231,26 @@ int main()
 
     glfwMakeContextCurrent(win);
     glfwSwapInterval(1);
+
+    // Set window icon (title bar + taskbar)
+    {
+#ifdef _WIN32
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+        std::string dir(exePath);
+        dir = dir.substr(0, dir.find_last_of("\\/") + 1);
+        std::string iconPath = dir + "res/reflow_icon.png";
+#else
+        std::string iconPath = "res/reflow_icon.png";
+#endif
+        int w, h, ch;
+        unsigned char* px = stbi_load(iconPath.c_str(), &w, &h, &ch, 4);
+        if (px) {
+            GLFWimage img = { w, h, px };
+            glfwSetWindowIcon(win, 1, &img);
+            stbi_image_free(px);
+        }
+    }
 
     glfwSetFramebufferSizeCallback(win, cb_resize);
     glfwSetMouseButtonCallback(win, cb_mouse_button);
