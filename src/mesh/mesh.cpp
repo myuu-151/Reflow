@@ -85,86 +85,45 @@ void Mesh::recalc_normals()
 }
 
 // ---------------------------------------------------------------------------
-// Cube primitive
+// Helper: build a quad face and append half-edges
 // ---------------------------------------------------------------------------
-Mesh Mesh::create_cube(float s)
+static void add_quad(Mesh& m, int v0, int v1, int v2, int v3)
 {
-    Mesh m;
-    m.name = "Cube";
+    int fi = (int)m.faces.size();
+    int base = (int)m.hedges.size();
+    int vi[4] = {v0, v1, v2, v3};
 
-    float h = s * 0.5f;
-    // 8 vertices of a cube
-    glm::vec3 p[8] = {
-        {-h, -h, -h}, { h, -h, -h}, { h,  h, -h}, {-h,  h, -h},
-        {-h, -h,  h}, { h, -h,  h}, { h,  h,  h}, {-h,  h,  h},
-    };
-    for (int i = 0; i < 8; i++) {
-        m.verts.push_back({p[i], {0,0}, -1, false});
+    for (int i = 0; i < 4; i++) {
+        HEdge he;
+        he.vertex = vi[(i + 1) % 4]; // destination
+        he.face = fi;
+        he.next = base + (i + 1) % 4;
+        he.prev = base + (i + 3) % 4;
+        he.twin = -1;
+        m.hedges.push_back(he);
+        m.verts[vi[i]].edge = base + i;
     }
 
-    // 6 faces (quads), defined by vertex indices (CCW winding)
-    int faceIdx[6][4] = {
-        {0, 3, 2, 1}, // front (-Z)
-        {4, 5, 6, 7}, // back  (+Z)
-        {0, 1, 5, 4}, // bottom
-        {2, 3, 7, 6}, // top
-        {0, 4, 7, 3}, // left
-        {1, 2, 6, 5}, // right
-    };
+    Face face;
+    face.edge = base;
+    face.selected = false;
+    face.normal = {0, 0, 0};
+    m.faces.push_back(face);
+}
 
-    int heIdx = 0;
-    for (int fi = 0; fi < 6; fi++) {
-        Face face;
-        face.edge = heIdx;
-        face.selected = false;
-
-        // Create 4 half-edges for this quad
-        for (int ei = 0; ei < 4; ei++) {
-            HEdge he;
-            he.vertex = faceIdx[fi][(ei + 1) % 4];
-            he.face = fi;
-            he.next = heIdx + (ei + 1) % 4;
-            he.prev = heIdx + (ei + 3) % 4;
-            he.twin = -1;
-            m.hedges.push_back(he);
-
-            // Point vertex to an outgoing edge
-            m.verts[faceIdx[fi][ei]].edge = heIdx + ei;
-            heIdx++;
-        }
-        m.faces.push_back(face);
-    }
-
-    // Link twins: find matching half-edge pairs
+static void link_twins(Mesh& m)
+{
+    // For each half-edge, source = vertex of the previous half-edge's destination
+    // i.e. source(he) = hedges[he.prev].vertex, dest(he) = he.vertex
+    // Twin: edge going in opposite direction (dest->source matches source->dest)
     for (int i = 0; i < (int)m.hedges.size(); i++) {
         if (m.hedges[i].twin >= 0) continue;
-        int srcV = m.hedges[m.hedges[i].prev].vertex; // source of edge i = dest of prev
-        // Actually source = vertex that prev points to? No.
-        // Half-edge i goes from verts[hedges[prev].vertex] to verts[hedges[i].vertex]
-        int fromV = m.hedges[m.hedges[i].prev].vertex;
-        // Wait, that's wrong for how we set it up. Let me reconsider.
-        // hedges[i].vertex = destination. Source = the vertex at the start of this half-edge.
-        // In our setup: face quad [v0,v1,v2,v3], half-edge 0: v0->v1, he.vertex=v1
-        // So source of he[i] is faceIdx[fi][ei], dest is faceIdx[fi][(ei+1)%4]
-        // With prev: hedges[prev].vertex = source of current half-edge? No.
-        // hedges[prev] goes from some vertex to the source of hedges[i].
-        // hedges[prev].vertex = destination of prev = source of current.
-        // So: fromV = hedges[hedges[i].prev].vertex... wait that's circular.
-        // Let me just use: source(i) = hedges[prev(i)].vertex ... no.
-        // Actually for the cube: he[0] has vertex = faceIdx[0][1], he[0].prev = he[3]
-        // he[3].vertex = faceIdx[0][0]. So hedges[prev].vertex IS the source. But that
-        // means fromV above is hedges[hedges[i].prev].vertex which points to the source.
-        // Hmm, no. he[3] goes from v3 to v0, so he[3].vertex = v0 = faceIdx[0][0].
-        // And he[0] goes from v0 to v1. Source of he[0] = v0.
-        // hedges[he[0].prev].vertex = he[3].vertex = v0. Yes! That's the source.
-
+        int iTo = m.hedges[i].vertex;
         int iFrom = m.hedges[m.hedges[i].prev].vertex;
-        int iTo   = m.hedges[i].vertex;
-
         for (int j = i + 1; j < (int)m.hedges.size(); j++) {
             if (m.hedges[j].twin >= 0) continue;
+            int jTo = m.hedges[j].vertex;
             int jFrom = m.hedges[m.hedges[j].prev].vertex;
-            int jTo   = m.hedges[j].vertex;
             if (iFrom == jTo && iTo == jFrom) {
                 m.hedges[i].twin = j;
                 m.hedges[j].twin = i;
@@ -173,7 +132,7 @@ Mesh Mesh::create_cube(float s)
         }
     }
 
-    // Build edge list from half-edge pairs
+    // Build edge list
     std::vector<bool> visited(m.hedges.size(), false);
     for (int i = 0; i < (int)m.hedges.size(); i++) {
         if (visited[i]) continue;
@@ -181,7 +140,33 @@ Mesh Mesh::create_cube(float s)
         if (m.hedges[i].twin >= 0) visited[m.hedges[i].twin] = true;
         m.edges.push_back({i, false});
     }
+}
 
+// ---------------------------------------------------------------------------
+// Cube primitive
+// ---------------------------------------------------------------------------
+Mesh Mesh::create_cube(float s)
+{
+    Mesh m;
+    m.name = "Cube";
+
+    float h = s * 0.5f;
+    glm::vec3 p[8] = {
+        {-h, -h, -h}, { h, -h, -h}, { h,  h, -h}, {-h,  h, -h},
+        {-h, -h,  h}, { h, -h,  h}, { h,  h,  h}, {-h,  h,  h},
+    };
+    for (int i = 0; i < 8; i++)
+        m.verts.push_back({p[i], {0,0}, -1, false});
+
+    // 6 quad faces (CCW winding when viewed from outside)
+    add_quad(m, 0, 3, 2, 1); // front (-Z)
+    add_quad(m, 4, 5, 6, 7); // back  (+Z)
+    add_quad(m, 0, 1, 5, 4); // bottom
+    add_quad(m, 2, 3, 7, 6); // top
+    add_quad(m, 0, 4, 7, 3); // left
+    add_quad(m, 1, 2, 6, 5); // right
+
+    link_twins(m);
     m.recalc_normals();
     m.rebuild_gpu();
     return m;
@@ -201,23 +186,8 @@ Mesh Mesh::create_plane(float s)
     m.verts.push_back({{ h, 0,  h}, {1,1}, -1, false});
     m.verts.push_back({{-h, 0,  h}, {0,1}, -1, false});
 
-    // One quad face
-    for (int i = 0; i < 4; i++) {
-        HEdge he;
-        he.vertex = (i + 1) % 4;
-        he.face = 0;
-        he.next = (i + 1) % 4;
-        he.prev = (i + 3) % 4;
-        he.twin = -1;
-        m.hedges.push_back(he);
-        m.verts[i].edge = i;
-    }
-    m.faces.push_back({0, {0,1,0}, false});
-    m.edges.push_back({0, false});
-    m.edges.push_back({1, false});
-    m.edges.push_back({2, false});
-    m.edges.push_back({3, false});
-
+    add_quad(m, 0, 1, 2, 3);
+    link_twins(m);
     m.recalc_normals();
     m.rebuild_gpu();
     return m;

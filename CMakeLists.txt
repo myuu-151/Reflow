@@ -14,6 +14,22 @@ add_subdirectory(thirdparty/glfw)
 add_library(glad STATIC thirdparty/glad/src/glad.c)
 target_include_directories(glad PUBLIC thirdparty/glad/include)
 
+# Dear ImGui
+add_library(imgui STATIC
+    thirdparty/imgui/imgui.cpp
+    thirdparty/imgui/imgui_demo.cpp
+    thirdparty/imgui/imgui_draw.cpp
+    thirdparty/imgui/imgui_tables.cpp
+    thirdparty/imgui/imgui_widgets.cpp
+    thirdparty/imgui/backends/imgui_impl_glfw.cpp
+    thirdparty/imgui/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui PUBLIC
+    thirdparty/imgui
+    thirdparty/imgui/backends
+)
+target_link_libraries(imgui PRIVATE glfw glad)
+
 # Reflow sources
 file(GLOB_RECURSE REFLOW_SOURCES
     src/*.cpp
@@ -26,9 +42,11 @@ target_include_directories(reflow PRIVATE
     src
     thirdparty/glad/include
     thirdparty/glm
+    thirdparty/imgui
+    thirdparty/imgui/backends
 )
 
-target_link_libraries(reflow PRIVATE glfw glad)
+target_link_libraries(reflow PRIVATE glfw glad imgui)
 
 # Windows: hide console in Release
 if(WIN32)
