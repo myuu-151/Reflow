@@ -15,11 +15,18 @@
 
 namespace rf {
 
-// Layout constants
-static constexpr float kTopBarHeight    = 48.0f;
-static constexpr float kToolbarWidth    = 160.0f;
-static constexpr float kRightPanelWidth = 260.0f;
-static constexpr float kStatusBarHeight = 36.0f;
+// Base layout constants (at scale 1.0)
+static constexpr float kBaseTopBarHeight    = 34.0f;
+static constexpr float kBaseToolbarWidth    = 114.0f;
+static constexpr float kBaseRightPanelWidth = 186.0f;
+static constexpr float kBaseStatusBarHeight = 26.0f;
+
+// Scaled layout accessors
+static float S() { return ImGui::GetIO().FontGlobalScale; }
+static float topBarHeight()    { return kBaseTopBarHeight    * S(); }
+static float toolbarWidth()    { return kBaseToolbarWidth    * S(); }
+static float rightPanelWidth() { return kBaseRightPanelWidth * S(); }
+static float statusBarHeight() { return kBaseStatusBarHeight * S(); }
 
 // Material Icons codepoints
 static constexpr const char* ICON_UNDO      = "\xE2\x86\xA9"; // U+21A9 ↩
@@ -36,6 +43,7 @@ static constexpr const char* ICON_BOX       = "\xEE\xA0\x8E"; // U+E80E 3d_rotat
 
 static ImFont* g_iconFont = nullptr;
 static ImFont* g_arrowFont = nullptr;
+static float g_lastAppliedScale = 1.0f; // tracks style scale factor (1.0 = theme defaults)
 static GLuint g_logoTexture = 0;
 static int g_logoW = 0, g_logoH = 0;
 
@@ -184,7 +192,7 @@ void ui_top_bar(UIState& state)
 {
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->Pos);
-    ImGui::SetNextWindowSize({vp->Size.x, kTopBarHeight});
+    ImGui::SetNextWindowSize({vp->Size.x, topBarHeight()});
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.08f, 0.08f, 0.10f, 1.0f});
     ImGui::Begin("##TopBar", nullptr,
@@ -276,10 +284,28 @@ void ui_top_bar(UIState& state)
     if (g_iconFont) ImGui::PushFont(g_iconFont);
     if (ImGui::Button(ICON_MENU, {iconBtnSize, iconBtnSize})) { /* TODO */ }
     ImGui::SameLine(0, iconGap);
-    if (ImGui::Button(ICON_MORE_VERT, {iconBtnSize, iconBtnSize})) { /* TODO */ }
+    if (ImGui::Button(ICON_MORE_VERT, {iconBtnSize, iconBtnSize}))
+        ImGui::OpenPopup("##MoreMenu");
     if (g_iconFont) ImGui::PopFont();
 
     ImGui::PopStyleColor(3);
+
+    // More menu popup
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, Colors::panelDark());
+    if (ImGui::BeginPopup("##MoreMenu")) {
+        ImGui::Text("UI Scale");
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::SliderFloat("##uiscale", &state.uiScale, 0.8f, 2.5f, "%.1fx")) {
+            ImGui::GetIO().FontGlobalScale = state.uiScale;
+            // Reset style to base, then scale
+            ui_apply_theme();
+            float scaleFactor = state.uiScale / 1.4f; // relative to default 1.4x
+            ImGui::GetStyle().ScaleAllSizes(scaleFactor);
+            g_lastAppliedScale = scaleFactor;
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor();
 
     ImGui::End();
     ImGui::PopStyleColor(); // WindowBg
@@ -291,11 +317,11 @@ void ui_top_bar(UIState& state)
 void ui_toolbar(UIState& state)
 {
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    float y = vp->Pos.y + kTopBarHeight;
-    float h = vp->Size.y - kTopBarHeight - kStatusBarHeight;
+    float y = vp->Pos.y + topBarHeight();
+    float h = vp->Size.y - topBarHeight() - statusBarHeight();
 
     ImGui::SetNextWindowPos({vp->Pos.x, y});
-    ImGui::SetNextWindowSize({kToolbarWidth, h});
+    ImGui::SetNextWindowSize({toolbarWidth(), h});
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.10f, 0.10f, 0.12f, 0.95f});
     ImGui::Begin("##Toolbar", nullptr,
@@ -314,7 +340,7 @@ void ui_toolbar(UIState& state)
     ImGui::SetCursorPosY(12);
     for (auto& t : tools) {
         bool active = (state.currentTool == t.tool);
-        float btnW = kToolbarWidth - 24;
+        float btnW = toolbarWidth() - 24;
         float btnH = 36.0f;
 
         if (active)
@@ -383,11 +409,11 @@ void ui_toolbar(UIState& state)
 void ui_objects_panel(UIState& state)
 {
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    float y = vp->Pos.y + kTopBarHeight;
-    float h = (vp->Size.y - kTopBarHeight - kStatusBarHeight) * 0.4f;
+    float y = vp->Pos.y + topBarHeight();
+    float h = (vp->Size.y - topBarHeight() - statusBarHeight()) * 0.4f;
 
-    ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x - kRightPanelWidth, y});
-    ImGui::SetNextWindowSize({kRightPanelWidth, h});
+    ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x - rightPanelWidth(), y});
+    ImGui::SetNextWindowSize({rightPanelWidth(), h});
 
     ImGui::Begin("##Objects", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -395,7 +421,7 @@ void ui_objects_panel(UIState& state)
 
     // Header
     ImGui::Text("OBJECTS");
-    ImGui::SameLine(kRightPanelWidth - 44);
+    ImGui::SameLine(rightPanelWidth() - 44);
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
     if (ImGui::Button("+", {24, 24})) { /* TODO: add primitive */ }
     ImGui::PopStyleColor();
@@ -405,7 +431,7 @@ void ui_objects_panel(UIState& state)
 
     // Object list (placeholder — will be driven by actual scene)
     ImGui::PushStyleColor(ImGuiCol_Button, {0.18f, 0.18f, 0.22f, 1.0f});
-    ImGui::Button("Cube", {kRightPanelWidth - 60, 32});
+    ImGui::Button("Cube", {rightPanelWidth() - 60, 32});
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
     ImGui::Text("eye");
@@ -418,12 +444,12 @@ void ui_objects_panel(UIState& state)
 void ui_properties_panel(UIState& state)
 {
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    float objH = (vp->Size.y - kTopBarHeight - kStatusBarHeight) * 0.4f;
-    float y = vp->Pos.y + kTopBarHeight + objH;
-    float h = vp->Size.y - kTopBarHeight - kStatusBarHeight - objH;
+    float objH = (vp->Size.y - topBarHeight() - statusBarHeight()) * 0.4f;
+    float y = vp->Pos.y + topBarHeight() + objH;
+    float h = vp->Size.y - topBarHeight() - statusBarHeight() - objH;
 
-    ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x - kRightPanelWidth, y});
-    ImGui::SetNextWindowSize({kRightPanelWidth, h});
+    ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x - rightPanelWidth(), y});
+    ImGui::SetNextWindowSize({rightPanelWidth(), h});
 
     ImGui::Begin("##Properties", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -464,10 +490,10 @@ void ui_properties_panel(UIState& state)
 void ui_status_bar(UIState& state)
 {
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    float y = vp->Pos.y + vp->Size.y - kStatusBarHeight;
+    float y = vp->Pos.y + vp->Size.y - statusBarHeight();
 
     ImGui::SetNextWindowPos({vp->Pos.x, y});
-    ImGui::SetNextWindowSize({vp->Size.x, kStatusBarHeight});
+    ImGui::SetNextWindowSize({vp->Size.x, statusBarHeight()});
 
     ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.08f, 0.08f, 0.10f, 1.0f});
     ImGui::Begin("##StatusBar", nullptr,
@@ -491,8 +517,8 @@ void ui_status_bar(UIState& state)
 void ui_viewport_overlay(UIState& state)
 {
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    float vpX = vp->Pos.x + kToolbarWidth;
-    float vpY = vp->Pos.y + kTopBarHeight;
+    float vpX = vp->Pos.x + toolbarWidth();
+    float vpY = vp->Pos.y + topBarHeight();
 
     // Perspective dropdown
     ImGui::SetNextWindowPos({vpX + 8, vpY + 8});
@@ -514,7 +540,7 @@ void ui_viewport_overlay(UIState& state)
     ImGui::PopStyleColor();
 
     // Orientation gizmo (simple XYZ text for now)
-    float gizX = vp->Pos.x + vp->Size.x - kRightPanelWidth - 80;
+    float gizX = vp->Pos.x + vp->Size.x - rightPanelWidth() - 80;
     float gizY = vpY + 16;
     ImGui::SetNextWindowPos({gizX, gizY});
     ImGui::SetNextWindowSize({0, 0});
@@ -544,5 +570,10 @@ void ui_viewport_overlay(UIState& state)
     ImGui::End();
     ImGui::PopStyleColor();
 }
+
+float ui_top_bar_height()    { return topBarHeight(); }
+float ui_toolbar_width()     { return toolbarWidth(); }
+float ui_right_panel_width() { return rightPanelWidth(); }
+float ui_status_bar_height() { return statusBarHeight(); }
 
 } // namespace rf

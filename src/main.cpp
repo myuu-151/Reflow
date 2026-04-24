@@ -47,11 +47,7 @@ static const glm::vec3 kMeshColor = {0.72f, 0.72f, 0.74f};
 static const glm::vec3 kWireColor = {0.2f, 0.2f, 0.22f};
 static const glm::vec3 kLightDir  = glm::normalize(glm::vec3(0.4f, 0.8f, 0.3f));
 
-// Layout constants (must match ui.cpp)
-static constexpr float kTopBarHeight    = 48.0f;
-static constexpr float kToolbarWidth    = 160.0f;
-static constexpr float kRightPanelWidth = 260.0f;
-static constexpr float kStatusBarHeight = 36.0f;
+// Layout from ui.cpp (dynamic, scale-aware)
 
 // ---------------------------------------------------------------------------
 // Callbacks
@@ -139,10 +135,10 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int)
 static void render_viewport()
 {
     // Calculate viewport region (between UI panels)
-    int vpX = (int)kToolbarWidth;
-    int vpY = (int)kStatusBarHeight;
-    int vpW = g_winW - (int)kToolbarWidth - (int)kRightPanelWidth;
-    int vpH = g_winH - (int)kTopBarHeight - (int)kStatusBarHeight;
+    int vpX = (int)rf::ui_toolbar_width();
+    int vpY = (int)rf::ui_status_bar_height();
+    int vpW = g_winW - (int)rf::ui_toolbar_width() - (int)rf::ui_right_panel_width();
+    int vpH = g_winH - (int)rf::ui_top_bar_height() - (int)rf::ui_status_bar_height();
 
     if (vpW < 1 || vpH < 1) return;
 

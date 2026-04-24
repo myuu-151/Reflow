@@ -34,6 +34,7 @@ struct UIState {
     SelectMode selectMode = SelectMode::Object;
     bool fileModified = false;
     std::string filename = "untitled.rflw";
+    float uiScale = 1.4f;
 };
 
 void ui_init(GLFWwindow* win);
@@ -50,5 +51,11 @@ void ui_status_bar(UIState& state);
 void ui_viewport_overlay(UIState& state);
 
 void ui_apply_theme();
+
+// Scaled layout dimensions
+float ui_top_bar_height();
+float ui_toolbar_width();
+float ui_right_panel_width();
+float ui_status_bar_height();
 
 } // namespace rf
