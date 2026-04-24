@@ -21,8 +21,9 @@ static constexpr float kBaseToolbarWidth    = 114.0f;
 static constexpr float kBaseRightPanelWidth = 186.0f;
 static constexpr float kBaseStatusBarHeight = 26.0f;
 
-// Scaled layout accessors
+// Scale factor and helpers
 static float S() { return ImGui::GetIO().FontGlobalScale; }
+static float s(float v) { return v * S(); } // scale any pixel value
 static float topBarHeight()    { return kBaseTopBarHeight    * S(); }
 static float toolbarWidth()    { return kBaseToolbarWidth    * S(); }
 static float rightPanelWidth() { return kBaseRightPanelWidth * S(); }
@@ -201,20 +202,20 @@ void ui_top_bar(UIState& state)
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     // Logo icon + text
-    ImGui::SetCursorPos({10, 8});
+    ImGui::SetCursorPos({s(7), s(6)});
     if (g_logoTexture) {
-        float iconSz = 30.0f;
+        float iconSz = s(21);
         ImGui::Image((ImTextureID)(intptr_t)g_logoTexture, {iconSz, iconSz});
-        ImGui::SameLine(0, 6);
-        ImGui::SetCursorPosY(12);
+        ImGui::SameLine(0, s(4));
+        ImGui::SetCursorPosY(s(8));
     }
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::accent());
     ImGui::Text("REFLOW");
     ImGui::PopStyleColor();
 
     // Filename
-    ImGui::SameLine(130);
-    ImGui::SetCursorPosY(14);
+    ImGui::SameLine(s(93));
+    ImGui::SetCursorPosY(s(10));
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
     ImGui::Text("|");
     ImGui::PopStyleColor();
@@ -228,10 +229,10 @@ void ui_top_bar(UIState& state)
     }
 
     // Mode tabs — centered
-    float tabWidth = 80.0f;
-    float totalTabWidth = tabWidth * 3 + 16;
+    float tabWidth = s(57);
+    float totalTabWidth = tabWidth * 3 + s(12);
     float tabStartX = (vp->Size.x - totalTabWidth) * 0.5f;
-    ImGui::SetCursorPos({tabStartX, 8});
+    ImGui::SetCursorPos({tabStartX, s(6)});
 
     const char* modeNames[] = {"MODEL", "PAINT", "UV"};
     EditorMode modes[] = {EditorMode::Model, EditorMode::Paint, EditorMode::UV};
@@ -247,7 +248,7 @@ void ui_top_bar(UIState& state)
             ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
         }
 
-        if (ImGui::Button(modeNames[i], {tabWidth, 30}))
+        if (ImGui::Button(modeNames[i], {tabWidth, s(21)}))
             state.editorMode = modes[i];
 
         // Underline for active tab
@@ -264,10 +265,10 @@ void ui_top_bar(UIState& state)
     }
 
     // Right side icons using Material Icons font
-    float iconBtnSize = 32.0f;
-    float iconGap = 4.0f;
-    float rightX = vp->Size.x - (iconBtnSize * 4 + iconGap * 3 + 16);
-    ImGui::SetCursorPos({rightX, 8});
+    float iconBtnSize = s(23);
+    float iconGap = s(3);
+    float rightX = vp->Size.x - (iconBtnSize * 4 + iconGap * 3 + s(12));
+    ImGui::SetCursorPos({rightX, s(6)});
 
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.2f, 0.2f, 0.24f, 1.0f});
@@ -294,14 +295,9 @@ void ui_top_bar(UIState& state)
     ImGui::PushStyleColor(ImGuiCol_PopupBg, Colors::panelDark());
     if (ImGui::BeginPopup("##MoreMenu")) {
         ImGui::Text("UI Scale");
-        ImGui::SetNextItemWidth(150);
+        ImGui::SetNextItemWidth(s(107));
         if (ImGui::SliderFloat("##uiscale", &state.uiScale, 0.8f, 2.5f, "%.1fx")) {
             ImGui::GetIO().FontGlobalScale = state.uiScale;
-            // Reset style to base, then scale
-            ui_apply_theme();
-            float scaleFactor = state.uiScale / 1.4f; // relative to default 1.4x
-            ImGui::GetStyle().ScaleAllSizes(scaleFactor);
-            g_lastAppliedScale = scaleFactor;
         }
         ImGui::EndPopup();
     }
@@ -337,18 +333,18 @@ void ui_toolbar(UIState& state)
         {Tool::Scale,  ICON_SCALE,  "Scale"},
     };
 
-    ImGui::SetCursorPosY(12);
+    ImGui::SetCursorPosY(s(9));
     for (auto& t : tools) {
         bool active = (state.currentTool == t.tool);
-        float btnW = toolbarWidth() - 24;
-        float btnH = 36.0f;
+        float btnW = toolbarWidth() - s(17);
+        float btnH = s(26);
 
         if (active)
             ImGui::PushStyleColor(ImGuiCol_Button, Colors::accent());
         else
             ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
 
-        ImGui::SetCursorPosX(12);
+        ImGui::SetCursorPosX(s(9));
         ImVec2 btnPos = ImGui::GetCursorScreenPos();
 
         char btnId[32];
@@ -358,33 +354,34 @@ void ui_toolbar(UIState& state)
 
         // Draw icon + label over the button
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        float iconX = btnPos.x + 10;
-        float textY = btnPos.y + (btnH - 20) * 0.5f;
+        float iconSz = s(14);
+        float iconX = btnPos.x + s(7);
+        float textY = btnPos.y + (btnH - iconSz) * 0.5f;
 
         ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text);
 
         // Icon
         if (g_iconFont) {
-            dl->AddText(g_iconFont, 20.0f, ImVec2(iconX, textY), textCol, t.icon);
+            dl->AddText(g_iconFont, iconSz, ImVec2(iconX, textY), textCol, t.icon);
         }
 
         // Label
-        float labelX = btnPos.x + 38;
-        dl->AddText(ImVec2(labelX, textY + 2), textCol, t.name);
+        float labelX = btnPos.x + s(27);
+        dl->AddText(ImVec2(labelX, textY + s(1)), textCol, t.name);
 
         ImGui::PopStyleColor();
         ImGui::Spacing();
     }
 
     // Selection mode buttons at bottom
-    ImGui::SetCursorPosY(h - 56);
+    ImGui::SetCursorPosY(h - s(40));
     ImGui::Separator();
     ImGui::Spacing();
 
     const char* selNames[] = {"Obj", "Vtx", "Edge", "Face"};
     SelectMode selModes[] = {SelectMode::Object, SelectMode::Vertex, SelectMode::Edge, SelectMode::Face};
 
-    ImGui::SetCursorPosX(12);
+    ImGui::SetCursorPosX(s(9));
     for (int i = 0; i < 4; i++) {
         bool active = (state.selectMode == selModes[i]);
         if (active)
@@ -392,7 +389,8 @@ void ui_toolbar(UIState& state)
         else
             ImGui::PushStyleColor(ImGuiCol_Button, Colors::input());
 
-        if (ImGui::Button(selNames[i], {30, 30}))
+        float selBtnSz = s(21);
+        if (ImGui::Button(selNames[i], {selBtnSz, selBtnSz}))
             state.selectMode = selModes[i];
 
         ImGui::PopStyleColor();
@@ -421,9 +419,9 @@ void ui_objects_panel(UIState& state)
 
     // Header
     ImGui::Text("OBJECTS");
-    ImGui::SameLine(rightPanelWidth() - 44);
+    ImGui::SameLine(rightPanelWidth() - s(31));
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
-    if (ImGui::Button("+", {24, 24})) { /* TODO: add primitive */ }
+    if (ImGui::Button("+", {s(17), s(17)})) { /* TODO: add primitive */ }
     ImGui::PopStyleColor();
 
     ImGui::Separator();
@@ -431,7 +429,7 @@ void ui_objects_panel(UIState& state)
 
     // Object list (placeholder — will be driven by actual scene)
     ImGui::PushStyleColor(ImGuiCol_Button, {0.18f, 0.18f, 0.22f, 1.0f});
-    ImGui::Button("Cube", {rightPanelWidth() - 60, 32});
+    ImGui::Button("Cube", {rightPanelWidth() - s(43), s(23)});
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
     ImGui::Text("eye");
@@ -501,8 +499,8 @@ void ui_status_bar(UIState& state)
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    float centerX = vp->Size.x * 0.5f - 200;
-    ImGui::SetCursorPos({centerX, 8});
+    float centerX = vp->Size.x * 0.5f - s(143);
+    ImGui::SetCursorPos({centerX, s(6)});
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
     ImGui::Text("MMB: Orbit    Shift+MMB: Pan    Scroll: Zoom");
     ImGui::PopStyleColor();
@@ -521,7 +519,7 @@ void ui_viewport_overlay(UIState& state)
     float vpY = vp->Pos.y + topBarHeight();
 
     // Perspective dropdown
-    ImGui::SetNextWindowPos({vpX + 8, vpY + 8});
+    ImGui::SetNextWindowPos({vpX + s(6), vpY + s(6)});
     ImGui::SetNextWindowSize({0, 0});
     ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.15f, 0.15f, 0.18f, 0.85f});
     ImGui::Begin("##PerspDrop", nullptr,
@@ -532,7 +530,7 @@ void ui_viewport_overlay(UIState& state)
     static int projMode = 0; // 0=Persp, 1=Ortho
     const char* projNames[] = {"Persp", "Ortho"};
     ImGui::PushStyleColor(ImGuiCol_Button, Colors::input());
-    if (ImGui::Button(projNames[projMode], {70, 26}))
+    if (ImGui::Button(projNames[projMode], {s(50), s(19)}))
         projMode = 1 - projMode;
     ImGui::PopStyleColor();
 
@@ -540,8 +538,8 @@ void ui_viewport_overlay(UIState& state)
     ImGui::PopStyleColor();
 
     // Orientation gizmo (simple XYZ text for now)
-    float gizX = vp->Pos.x + vp->Size.x - rightPanelWidth() - 80;
-    float gizY = vpY + 16;
+    float gizX = vp->Pos.x + vp->Size.x - rightPanelWidth() - s(57);
+    float gizY = vpY + s(11);
     ImGui::SetNextWindowPos({gizX, gizY});
     ImGui::SetNextWindowSize({0, 0});
     ImGui::PushStyleColor(ImGuiCol_WindowBg, {0, 0, 0, 0});
@@ -552,20 +550,20 @@ void ui_viewport_overlay(UIState& state)
         ImGuiWindowFlags_NoInputs);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 center = {gizX + 30, gizY + 30};
-    float len = 22.0f;
+    float len = s(16);
+    ImVec2 center = {gizX + s(21), gizY + s(21)};
 
     // X axis (red)
     dl->AddLine(center, {center.x + len, center.y}, IM_COL32(230, 80, 80, 255), 2.0f);
-    dl->AddText({center.x + len + 4, center.y - 7}, IM_COL32(230, 80, 80, 255), "X");
+    dl->AddText({center.x + len + s(3), center.y - s(5)}, IM_COL32(230, 80, 80, 255), "X");
 
     // Y axis (green)
     dl->AddLine(center, {center.x, center.y - len}, IM_COL32(80, 200, 80, 255), 2.0f);
-    dl->AddText({center.x - 4, center.y - len - 18}, IM_COL32(80, 200, 80, 255), "Y");
+    dl->AddText({center.x - s(3), center.y - len - s(13)}, IM_COL32(80, 200, 80, 255), "Y");
 
     // Z axis (blue)
     dl->AddLine(center, {center.x - len * 0.6f, center.y + len * 0.6f}, IM_COL32(80, 120, 230, 255), 2.0f);
-    dl->AddText({center.x - len * 0.6f - 14, center.y + len * 0.6f - 2}, IM_COL32(80, 120, 230, 255), "Z");
+    dl->AddText({center.x - len * 0.6f - s(10), center.y + len * 0.6f - s(1)}, IM_COL32(80, 120, 230, 255), "Z");
 
     ImGui::End();
     ImGui::PopStyleColor();
