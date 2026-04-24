@@ -22,8 +22,8 @@ static constexpr float kRightPanelWidth = 260.0f;
 static constexpr float kStatusBarHeight = 36.0f;
 
 // Material Icons codepoints
-static constexpr const char* ICON_UNDO      = "\xEE\x85\xA6"; // U+E166
-static constexpr const char* ICON_REDO      = "\xEE\x85\x9A"; // U+E15A
+static constexpr const char* ICON_UNDO      = "\xE2\x86\xA9"; // U+21A9 ↩
+static constexpr const char* ICON_REDO      = "\xE2\x86\xAA"; // U+21AA ↪
 static constexpr const char* ICON_MENU      = "\xEE\x97\x92"; // U+E5D2
 static constexpr const char* ICON_MORE_VERT = "\xEE\x97\x94"; // U+E5D4
 
@@ -35,6 +35,7 @@ static constexpr const char* ICON_SCALE     = "\xEE\x8F\x82"; // U+E3C2 crop_fre
 static constexpr const char* ICON_BOX       = "\xEE\xA0\x8E"; // U+E80E 3d_rotation (cube)
 
 static ImFont* g_iconFont = nullptr;
+static ImFont* g_arrowFont = nullptr;
 static GLuint g_logoTexture = 0;
 static int g_logoW = 0, g_logoH = 0;
 
@@ -64,7 +65,18 @@ void ui_init(GLFWwindow* win)
     io.FontGlobalScale = 1.4f;
 
     // Default font
-    io.Fonts->AddFontDefault();
+    static const ImWchar mainRanges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1
+        0
+    };
+    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 14.0f, nullptr, mainRanges);
+
+    // Arrow font (separate, use PushFont/PopFont for undo/redo)
+    static const ImWchar arrowRanges[] = { 0x2190, 0x21FF, 0 };
+    ImFontConfig arrowCfg;
+    arrowCfg.PixelSnapH = true;
+    arrowCfg.GlyphMinAdvanceX = 20.0f;
+    g_arrowFont = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/seguisym.ttf", 20.0f, &arrowCfg, arrowRanges);
 
     // Icon font (separate, use PushFont/PopFont)
     static const ImWchar iconRanges[] = { 0xE000, 0xF000, 0 };
@@ -253,11 +265,15 @@ void ui_top_bar(UIState& state)
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.2f, 0.2f, 0.24f, 1.0f});
     ImGui::PushStyleColor(ImGuiCol_Text, {0.55f, 0.55f, 0.58f, 1.0f});
 
-    if (g_iconFont) ImGui::PushFont(g_iconFont);
+    // Undo/Redo use arrow font (Segoe UI Symbol)
+    if (g_arrowFont) ImGui::PushFont(g_arrowFont);
     if (ImGui::Button(ICON_UNDO, {iconBtnSize, iconBtnSize})) { /* TODO */ }
     ImGui::SameLine(0, iconGap);
     if (ImGui::Button(ICON_REDO, {iconBtnSize, iconBtnSize})) { /* TODO */ }
+    if (g_arrowFont) ImGui::PopFont();
     ImGui::SameLine(0, iconGap);
+    // Menu icons use Material Icons font
+    if (g_iconFont) ImGui::PushFont(g_iconFont);
     if (ImGui::Button(ICON_MENU, {iconBtnSize, iconBtnSize})) { /* TODO */ }
     ImGui::SameLine(0, iconGap);
     if (ImGui::Button(ICON_MORE_VERT, {iconBtnSize, iconBtnSize})) { /* TODO */ }
