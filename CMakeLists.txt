@@ -48,6 +48,13 @@ target_include_directories(reflow PRIVATE
 
 target_link_libraries(reflow PRIVATE glfw glad imgui)
 
+# Copy res/ to build output
+add_custom_command(TARGET reflow POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/res
+        $<TARGET_FILE_DIR:reflow>/res
+)
+
 # Windows: hide console in Release
 if(WIN32)
     set_target_properties(reflow PROPERTIES

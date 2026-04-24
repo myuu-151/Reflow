@@ -12,6 +12,14 @@ static constexpr float kToolbarWidth    = 160.0f;
 static constexpr float kRightPanelWidth = 260.0f;
 static constexpr float kStatusBarHeight = 36.0f;
 
+// Material Icons codepoints
+static constexpr const char* ICON_UNDO      = "\xEE\x85\xA6"; // U+E166
+static constexpr const char* ICON_REDO      = "\xEE\x85\x9A"; // U+E15A
+static constexpr const char* ICON_MENU      = "\xEE\x97\x92"; // U+E5D2
+static constexpr const char* ICON_MORE_VERT = "\xEE\x97\x94"; // U+E5D4
+
+static ImFont* g_iconFont = nullptr;
+
 void ui_init(GLFWwindow* win)
 {
     IMGUI_CHECKVERSION();
@@ -20,8 +28,17 @@ void ui_init(GLFWwindow* win)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = nullptr; // don't save layout
 
-    // Scale up font for readability
     io.FontGlobalScale = 1.4f;
+
+    // Default font
+    io.Fonts->AddFontDefault();
+
+    // Icon font (separate, use PushFont/PopFont)
+    static const ImWchar iconRanges[] = { 0xE000, 0xF000, 0 };
+    ImFontConfig iconCfg;
+    iconCfg.PixelSnapH = true;
+    iconCfg.GlyphMinAdvanceX = 20.0f;
+    g_iconFont = io.Fonts->AddFontFromFileTTF("res/MaterialIcons-Regular.ttf", 20.0f, &iconCfg, iconRanges);
 
     ImGui_ImplGlfw_InitForOpenGL(win, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -171,99 +188,27 @@ void ui_top_bar(UIState& state)
         if (i < 2) ImGui::SameLine();
     }
 
-    // Right side icons: undo, redo, menu, more
-    float iconSize = 28.0f;
-    float iconGap = 8.0f;
-    float rightX = vp->Pos.x + vp->Size.x - (iconSize * 4 + iconGap * 3 + 16);
-    ImGui::SetCursorPos({rightX - vp->Pos.x, 10});
+    // Right side icons using Material Icons font
+    float iconBtnSize = 32.0f;
+    float iconGap = 4.0f;
+    float rightX = vp->Size.x - (iconBtnSize * 4 + iconGap * 3 + 16);
+    ImGui::SetCursorPos({rightX, 8});
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImU32 iconCol = ImGui::GetColorU32({0.55f, 0.55f, 0.58f, 1.0f});
-    ImU32 iconHov = ImGui::GetColorU32({0.80f, 0.80f, 0.83f, 1.0f});
-
-    // Undo arrow — rounded open curve sweeping left with arrowhead at tip
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
-    if (ImGui::Button("##undo", {iconSize, iconSize})) { /* TODO */ }
-    {
-        ImVec2 mn = ImGui::GetItemRectMin();
-        bool hov = ImGui::IsItemHovered();
-        ImU32 c = hov ? iconHov : iconCol;
-        float cx = mn.x + iconSize * 0.5f, cy = mn.y + iconSize * 0.5f;
-        float r = 8.0f;
-        // Arc: starts at bottom-right, sweeps over top to bottom-left
-        // Goes from ~-30deg (bottom-right) over the top to ~210deg (bottom-left)
-        float startAngle = -0.5f;   // just below right side
-        float endAngle   = 3.14f + 0.5f; // past the left side going down
-        dl->PathArcTo({cx, cy + 1}, r, startAngle, endAngle, 20);
-        dl->PathStroke(c, 0, 2.2f);
-        // Arrowhead at the end of the arc (bottom-left, pointing down-left)
-        float ax = cx + r * cosf(endAngle);
-        float ay = cy + 1 + r * sinf(endAngle);
-        dl->AddTriangleFilled(
-            {ax - 1, ay + 4},   // tip (pointing down)
-            {ax - 5, ay - 2},   // left wing
-            {ax + 3, ay - 1},   // right wing
-            c);
-    }
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.2f, 0.2f, 0.24f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.55f, 0.55f, 0.58f, 1.0f});
 
+    if (g_iconFont) ImGui::PushFont(g_iconFont);
+    if (ImGui::Button(ICON_UNDO, {iconBtnSize, iconBtnSize})) { /* TODO */ }
     ImGui::SameLine(0, iconGap);
-
-    // Redo arrow — mirror of undo, sweeps right
-    if (ImGui::Button("##redo", {iconSize, iconSize})) { /* TODO */ }
-    {
-        ImVec2 mn = ImGui::GetItemRectMin();
-        bool hov = ImGui::IsItemHovered();
-        ImU32 c = hov ? iconHov : iconCol;
-        float cx = mn.x + iconSize * 0.5f, cy = mn.y + iconSize * 0.5f;
-        float r = 8.0f;
-        // Arc: from bottom-left, sweeps over top to bottom-right
-        float startAngle = 3.14f + 0.5f; // bottom-left
-        float endAngle   = -0.5f;        // bottom-right
-        // Draw reversed: from right going over top to left
-        dl->PathArcTo({cx, cy + 1}, r, 3.14f - (-0.5f), 3.14f - (3.14f + 0.5f), 20);
-        dl->PathStroke(c, 0, 2.2f);
-        // Arrowhead at bottom-right
-        float endA = 3.14f - (3.14f + 0.5f); // = -0.5
-        float ax = cx + r * cosf(endA);
-        float ay = cy + 1 + r * sinf(endA);
-        dl->AddTriangleFilled(
-            {ax + 1, ay + 4},   // tip
-            {ax + 5, ay - 2},   // right wing
-            {ax - 3, ay - 1},   // left wing
-            c);
-    }
-
+    if (ImGui::Button(ICON_REDO, {iconBtnSize, iconBtnSize})) { /* TODO */ }
     ImGui::SameLine(0, iconGap);
-
-    // Hamburger menu (3 horizontal lines)
-    if (ImGui::Button("##menu", {iconSize, iconSize})) { /* TODO */ }
-    {
-        ImVec2 mn = ImGui::GetItemRectMin();
-        bool hov = ImGui::IsItemHovered();
-        ImU32 c = hov ? iconHov : iconCol;
-        float lx = mn.x + 6, rx = mn.x + iconSize - 6;
-        for (int i = 0; i < 3; i++) {
-            float ly = mn.y + 8 + i * 6;
-            dl->AddLine({lx, ly}, {rx, ly}, c, 2.0f);
-        }
-    }
-
+    if (ImGui::Button(ICON_MENU, {iconBtnSize, iconBtnSize})) { /* TODO */ }
     ImGui::SameLine(0, iconGap);
+    if (ImGui::Button(ICON_MORE_VERT, {iconBtnSize, iconBtnSize})) { /* TODO */ }
+    if (g_iconFont) ImGui::PopFont();
 
-    // Three dots (vertical ellipsis)
-    if (ImGui::Button("##more", {iconSize, iconSize})) { /* TODO */ }
-    {
-        ImVec2 mn = ImGui::GetItemRectMin();
-        bool hov = ImGui::IsItemHovered();
-        ImU32 c = hov ? iconHov : iconCol;
-        float cx = mn.x + iconSize * 0.5f;
-        for (int i = 0; i < 3; i++) {
-            float cy = mn.y + 7 + i * 7;
-            dl->AddCircleFilled({cx, cy}, 2.0f, c);
-        }
-    }
-
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(3);
 
     ImGui::End();
     ImGui::PopStyleColor(); // WindowBg
