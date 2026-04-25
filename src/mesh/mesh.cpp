@@ -1,6 +1,9 @@
 #include "mesh/mesh.h"
 #include <fstream>
 #include <cmath>
+#include <map>
+#include <set>
+#include <algorithm>
 
 namespace rf {
 
@@ -233,6 +236,446 @@ bool Mesh::export_obj(const std::string& path) const
     }
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Ray-triangle intersection (Moller-Trumbore)
+// ---------------------------------------------------------------------------
+static bool ray_tri(const glm::vec3& o, const glm::vec3& d,
+                    const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
+                    float& t)
+{
+    glm::vec3 e1 = v1 - v0, e2 = v2 - v0;
+    glm::vec3 h = glm::cross(d, e2);
+    float a = glm::dot(e1, h);
+    if (a > -1e-6f && a < 1e-6f) return false;
+    float f = 1.0f / a;
+    glm::vec3 s = o - v0;
+    float u = f * glm::dot(s, h);
+    if (u < 0.0f || u > 1.0f) return false;
+    glm::vec3 q = glm::cross(s, e1);
+    float v = f * glm::dot(d, q);
+    if (v < 0.0f || u + v > 1.0f) return false;
+    t = f * glm::dot(e2, q);
+    return t > 1e-6f;
+}
+
+// Distance from point to ray (closest approach)
+static float point_ray_dist(const glm::vec3& p, const glm::vec3& rayO, const glm::vec3& rayD)
+{
+    glm::vec3 v = p - rayO;
+    float t = glm::dot(v, rayD);
+    if (t < 0) return glm::length(v);
+    glm::vec3 closest = rayO + rayD * t;
+    return glm::length(p - closest);
+}
+
+// Distance from line segment to ray
+static float seg_ray_dist(const glm::vec3& a, const glm::vec3& b,
+                           const glm::vec3& rayO, const glm::vec3& rayD)
+{
+    // Closest approach between two lines
+    glm::vec3 u = b - a;
+    glm::vec3 w = a - rayO;
+    float uu = glm::dot(u, u);
+    float ud = glm::dot(u, rayD);
+    float dd = glm::dot(rayD, rayD);
+    float uw = glm::dot(u, w);
+    float dw = glm::dot(rayD, w);
+    float denom = uu * dd - ud * ud;
+    if (denom < 1e-8f) {
+        // Parallel — distance from point a to ray
+        return point_ray_dist(a, rayO, rayD);
+    }
+    float s = (ud * dw - dd * uw) / denom;
+    float t = (uu * dw - ud * uw) / denom;
+    s = glm::clamp(s, 0.0f, 1.0f);
+    if (t < 0) t = 0;
+    glm::vec3 pa = a + u * s;
+    glm::vec3 pb = rayO + rayD * t;
+    return glm::length(pa - pb);
+}
+
+// ---------------------------------------------------------------------------
+// Picking
+// ---------------------------------------------------------------------------
+int Mesh::pick_vertex(const glm::vec3& rayO, const glm::vec3& rayD, float threshold) const
+{
+    int best = -1;
+    float bestDist = threshold;
+    for (int i = 0; i < (int)verts.size(); i++) {
+        float d = point_ray_dist(verts[i].pos + position, rayO, rayD);
+        if (d < bestDist) {
+            bestDist = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+int Mesh::pick_edge(const glm::vec3& rayO, const glm::vec3& rayD, float threshold) const
+{
+    int best = -1;
+    float bestDist = threshold;
+    for (int i = 0; i < (int)edges.size(); i++) {
+        int he = edges[i].he;
+        int va = hedges[hedges[he].prev].vertex;
+        int vb = hedges[he].vertex;
+        float d = seg_ray_dist(verts[va].pos + position, verts[vb].pos + position, rayO, rayD);
+        if (d < bestDist) {
+            bestDist = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+int Mesh::pick_face(const glm::vec3& rayO, const glm::vec3& rayD) const
+{
+    int best = -1;
+    float bestT = 1e30f;
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        // Collect face verts
+        std::vector<int> fv;
+        int start = faces[fi].edge;
+        int cur = start;
+        do {
+            fv.push_back(hedges[cur].vertex);
+            cur = hedges[cur].next;
+        } while (cur != start && (int)fv.size() < 64);
+
+        // Fan-triangulate and test
+        for (int i = 1; i + 1 < (int)fv.size(); i++) {
+            float t;
+            if (ray_tri(rayO, rayD,
+                        verts[fv[0]].pos + position,
+                        verts[fv[i]].pos + position,
+                        verts[fv[i+1]].pos + position, t)) {
+                if (t < bestT) {
+                    bestT = t;
+                    best = fi;
+                }
+            }
+        }
+    }
+    return best;
+}
+
+void Mesh::deselect_all()
+{
+    for (auto& v : verts) v.selected = false;
+    for (auto& e : edges) e.selected = false;
+    for (auto& f : faces) f.selected = false;
+}
+
+// ---------------------------------------------------------------------------
+// Selection queries
+// ---------------------------------------------------------------------------
+std::vector<int> Mesh::get_selected_vert_indices() const
+{
+    std::vector<int> r;
+    for (int i = 0; i < (int)verts.size(); i++)
+        if (verts[i].selected) r.push_back(i);
+    return r;
+}
+
+glm::vec3 Mesh::get_selection_center() const
+{
+    glm::vec3 sum(0);
+    int count = 0;
+    for (auto& v : verts) {
+        if (v.selected) { sum += v.pos; count++; }
+    }
+    return count > 0 ? (sum / (float)count + position) : position;
+}
+
+glm::vec3 Mesh::get_selected_face_normal() const
+{
+    glm::vec3 avg(0);
+    int count = 0;
+    for (auto& f : faces) {
+        if (f.selected) { avg += f.normal; count++; }
+    }
+    return count > 0 ? glm::normalize(avg) : glm::vec3(0, 1, 0);
+}
+
+int Mesh::count_selected_faces() const
+{
+    int c = 0;
+    for (auto& f : faces) if (f.selected) c++;
+    return c;
+}
+
+int Mesh::count_selected_verts() const
+{
+    int c = 0;
+    for (auto& v : verts) if (v.selected) c++;
+    return c;
+}
+
+int Mesh::count_selected_edges() const
+{
+    int c = 0;
+    for (auto& e : edges) if (e.selected) c++;
+    return c;
+}
+
+// ---------------------------------------------------------------------------
+// Translate selected vertices
+// ---------------------------------------------------------------------------
+void Mesh::translate_selected(const glm::vec3& delta)
+{
+    for (auto& v : verts)
+        if (v.selected) v.pos += delta;
+    recalc_normals();
+    rebuild_gpu();
+}
+
+// ---------------------------------------------------------------------------
+// Extrude selected faces
+// ---------------------------------------------------------------------------
+void Mesh::extrude_selected_faces()
+{
+    std::vector<int> selFaces;
+    for (int i = 0; i < (int)faces.size(); i++)
+        if (faces[i].selected) selFaces.push_back(i);
+    if (selFaces.empty()) return;
+
+    // Collect all face vertex loops
+    struct FLoop { std::vector<int> v; bool sel; };
+    std::vector<FLoop> allLoops;
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        FLoop fl;
+        fl.sel = faces[fi].selected;
+        int start = faces[fi].edge;
+        int cur = start;
+        do {
+            fl.v.push_back(hedges[cur].vertex);
+            cur = hedges[cur].next;
+        } while (cur != start && (int)fl.v.size() < 64);
+        allLoops.push_back(fl);
+    }
+
+    // Duplicate verts used by selected faces
+    std::map<int, int> dupMap;
+    for (auto& fl : allLoops) {
+        if (!fl.sel) continue;
+        for (int vi : fl.v) {
+            if (dupMap.find(vi) == dupMap.end()) {
+                int newVi = (int)verts.size();
+                MeshVertex nv = verts[vi];
+                nv.selected = true;
+                nv.edge = -1;
+                verts.push_back(nv);
+                dupMap[vi] = newVi;
+            }
+        }
+    }
+
+    // Deselect old verts
+    for (auto& [old, nw] : dupMap)
+        verts[old].selected = false;
+
+    // Build set of selected face indices for edge-sharing check
+    std::set<int> selSet(selFaces.begin(), selFaces.end());
+
+    // Build new face loops
+    std::vector<FLoop> newLoops;
+    for (int fi = 0; fi < (int)allLoops.size(); fi++) {
+        auto& fl = allLoops[fi];
+        if (fl.sel) {
+            // Top face with new verts
+            FLoop top;
+            top.sel = true;
+            for (int vi : fl.v) top.v.push_back(dupMap[vi]);
+            newLoops.push_back(top);
+
+            // Side faces for boundary edges
+            for (int i = 0; i < (int)fl.v.size(); i++) {
+                int a = fl.v[i];
+                int b = fl.v[(i + 1) % fl.v.size()];
+
+                // Check if edge a→b is shared with another selected face
+                bool shared = false;
+                for (int fi2 : selFaces) {
+                    if (fi2 == fi) continue;
+                    auto& fl2 = allLoops[fi2];
+                    for (int j = 0; j < (int)fl2.v.size(); j++) {
+                        if (fl2.v[j] == b && fl2.v[(j + 1) % fl2.v.size()] == a) {
+                            shared = true;
+                            break;
+                        }
+                    }
+                    if (shared) break;
+                }
+
+                if (!shared) {
+                    FLoop side;
+                    side.sel = false;
+                    side.v = {b, a, dupMap[a], dupMap[b]};
+                    newLoops.push_back(side);
+                }
+            }
+        } else {
+            newLoops.push_back(fl);
+        }
+    }
+
+    // Rebuild topology from face loops
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : newLoops) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+
+        Face face;
+        face.edge = base;
+        face.selected = fl.sel;
+        face.normal = {0, 0, 0};
+        faces.push_back(face);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    // Build edge list
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+}
+
+// ---------------------------------------------------------------------------
+// Delete selected elements
+// ---------------------------------------------------------------------------
+void Mesh::delete_selected()
+{
+    // Collect face vertex loops for faces to keep
+    struct FLoop { std::vector<int> v; };
+    std::vector<FLoop> keepLoops;
+
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        if (faces[fi].selected) continue;
+        // Also skip faces that reference any selected vertex
+        bool hasSelVert = false;
+        int start = faces[fi].edge;
+        int cur = start;
+        std::vector<int> fv;
+        do {
+            int vi = hedges[cur].vertex;
+            fv.push_back(vi);
+            if (verts[vi].selected) hasSelVert = true;
+            cur = hedges[cur].next;
+        } while (cur != start && (int)fv.size() < 64);
+
+        if (!hasSelVert) {
+            keepLoops.push_back({fv});
+        }
+    }
+
+    if ((int)keepLoops.size() == (int)faces.size()) return;
+
+    // Find used verts and remap
+    std::set<int> usedSet;
+    for (auto& fl : keepLoops)
+        for (int vi : fl.v) usedSet.insert(vi);
+
+    std::map<int, int> remap;
+    std::vector<MeshVertex> newVerts;
+    for (int vi : usedSet) {
+        remap[vi] = (int)newVerts.size();
+        MeshVertex nv = verts[vi];
+        nv.selected = false;
+        nv.edge = -1;
+        newVerts.push_back(nv);
+    }
+
+    verts = newVerts;
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+
+    for (auto& fl : keepLoops) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = remap[fl.v[(i + 1) % n]];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[remap[fl.v[i]]].edge = base + i;
+        }
+
+        Face face;
+        face.edge = base;
+        face.selected = false;
+        face.normal = {0, 0, 0};
+        faces.push_back(face);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    recalc_normals();
+    rebuild_gpu();
 }
 
 } // namespace rf

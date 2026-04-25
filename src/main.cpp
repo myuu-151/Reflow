@@ -9,8 +9,10 @@
 #include <stb_image.h>
 
 #include <cstdio>
+#include <cmath>
 #include <vector>
 #include <string>
+#include <set>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -42,10 +44,29 @@ static int g_winW = rf::kDefaultWidth;
 static int g_winH = rf::kDefaultHeight;
 
 // Colors
-static const glm::vec3 kBgColor   = {0.12f, 0.12f, 0.14f};
-static const glm::vec3 kMeshColor = {0.72f, 0.72f, 0.74f};
-static const glm::vec3 kWireColor = {0.2f, 0.2f, 0.22f};
-static const glm::vec3 kLightDir  = glm::normalize(glm::vec3(0.4f, 0.8f, 0.3f));
+static const glm::vec3 kBgColor    = {0.12f, 0.12f, 0.14f};
+static const glm::vec3 kMeshColor  = {0.72f, 0.72f, 0.74f};
+static const glm::vec3 kWireColor  = {0.2f, 0.2f, 0.22f};
+static const glm::vec3 kLightDir   = glm::normalize(glm::vec3(0.4f, 0.8f, 0.3f));
+static const glm::vec3 kSelectColor = {1.0f, 0.55f, 0.1f};  // orange selection
+static const glm::vec3 kAxisColors[3] = {{1,0.2f,0.2f}, {0.2f,1,0.2f}, {0.3f,0.3f,1}};
+
+// Viewport cache (updated each frame in render_viewport)
+static int g_vpX, g_vpY, g_vpW, g_vpH;
+static glm::mat4 g_viewMat, g_projMat;
+
+// Selection overlay GPU objects
+static GLuint g_selVAO = 0, g_selVBO = 0;
+
+// Transform mode: 0=none, 1=grab, 2=scale, 3=rotate
+static int g_transformMode = 0;
+static int g_grab_axis = -1;           // -1=free, 0=X, 1=Y, 2=Z
+static glm::vec3 g_grab_center;       // world-space center at start
+static double g_grab_startMX, g_grab_startMY;
+static std::vector<glm::vec3> g_grab_origPos;
+static std::vector<int> g_grab_vertIdx;
+static float g_scale_start_dist = 1.0f; // for scale mode
+static float g_rotate_start_angle = 0.0f; // for rotate mode
 
 // Layout from ui.cpp (dynamic, scale-aware)
 
@@ -59,9 +80,116 @@ static void cb_resize(GLFWwindow*, int w, int h)
     glViewport(0, 0, w, h);
 }
 
+// Compute world-space ray from screen coordinates
+static void screen_to_ray(double mx, double my, glm::vec3& rayO, glm::vec3& rayD)
+{
+    float topBar = rf::ui_top_bar_height();
+    float relX = (float)(mx - g_vpX);
+    float relY = (float)(my - topBar);
+
+    float ndcX = (relX / g_vpW) * 2.0f - 1.0f;
+    float ndcY = 1.0f - (relY / g_vpH) * 2.0f;
+
+    glm::mat4 invVP = glm::inverse(g_projMat * g_viewMat);
+    glm::vec4 near4 = invVP * glm::vec4(ndcX, ndcY, -1, 1);
+    glm::vec4 far4  = invVP * glm::vec4(ndcX, ndcY,  1, 1);
+    near4 /= near4.w;
+    far4  /= far4.w;
+
+    rayO = glm::vec3(near4);
+    rayD = glm::normalize(glm::vec3(far4) - glm::vec3(near4));
+}
+
+static bool mouse_in_viewport(double mx, double my)
+{
+    float topBar = rf::ui_top_bar_height();
+    float relX = (float)(mx - g_vpX);
+    float relY = (float)(my - topBar);
+    return relX >= 0 && relX < g_vpW && relY >= 0 && relY < g_vpH;
+}
+
+static void cancel_transform()
+{
+    if (g_transformMode != 0 && !g_meshes.empty()) {
+        auto& mesh = g_meshes[g_selectedMesh];
+        for (int i = 0; i < (int)g_grab_vertIdx.size(); i++)
+            mesh.verts[g_grab_vertIdx[i]].pos = g_grab_origPos[i];
+        mesh.recalc_normals();
+        mesh.rebuild_gpu();
+    }
+    g_transformMode = 0;
+    g_grab_axis = -1;
+}
+
+static void confirm_transform()
+{
+    g_transformMode = 0;
+    g_grab_axis = -1;
+}
+
+static void start_transform(int mode)
+{
+    if (g_meshes.empty()) return;
+    auto& mesh = g_meshes[g_selectedMesh];
+
+    g_grab_vertIdx.clear();
+    g_grab_origPos.clear();
+
+    // Collect selected verts (or verts of selected edges/faces)
+    std::set<int> selVerts;
+    if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+        for (int i = 0; i < (int)mesh.verts.size(); i++)
+            if (mesh.verts[i].selected) selVerts.insert(i);
+    } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+        for (auto& e : mesh.edges) {
+            if (!e.selected) continue;
+            int he = e.he;
+            selVerts.insert(mesh.hedges[mesh.hedges[he].prev].vertex);
+            selVerts.insert(mesh.hedges[he].vertex);
+        }
+    } else if (g_uiState.selectMode == rf::SelectMode::Face) {
+        for (auto& f : mesh.faces) {
+            if (!f.selected) continue;
+            int start = f.edge;
+            int cur = start;
+            do {
+                selVerts.insert(mesh.hedges[cur].vertex);
+                cur = mesh.hedges[cur].next;
+            } while (cur != start);
+        }
+    }
+
+    if (selVerts.empty()) return;
+
+    for (int vi : selVerts) {
+        g_grab_vertIdx.push_back(vi);
+        g_grab_origPos.push_back(mesh.verts[vi].pos);
+    }
+
+    g_grab_center = mesh.get_selection_center();
+    g_transformMode = mode;
+    g_grab_axis = -1;
+
+    double mx, my;
+    glfwGetCursorPos(glfwGetCurrentContext(), &mx, &my);
+    g_grab_startMX = mx;
+    g_grab_startMY = my;
+
+    if (mode == 2) {
+        // Scale: measure initial distance from center to mouse
+        g_scale_start_dist = (float)std::sqrt(
+            (mx - g_grab_startMX) * (mx - g_grab_startMX) +
+            (my - g_grab_startMY) * (my - g_grab_startMY));
+        if (g_scale_start_dist < 1.0f) g_scale_start_dist = 1.0f;
+    }
+    if (mode == 3) {
+        // Rotate: measure initial angle
+        g_rotate_start_angle = (float)std::atan2(my - g_grab_startMY, mx - g_grab_startMX);
+    }
+}
+
 static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
 {
-    // Don't handle if ImGui wants the mouse
     if (ImGui::GetIO().WantCaptureMouse) return;
 
     if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
@@ -71,6 +199,50 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
         g_rmb_down = (action == GLFW_PRESS);
         glfwGetCursorPos(win, &g_lastX, &g_lastY);
+        // Cancel transform on right click
+        if (action == GLFW_PRESS && g_transformMode != 0) {
+            cancel_transform();
+            return;
+        }
+    }
+
+    // Left click: confirm transform or pick elements
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        if (g_transformMode != 0) {
+            confirm_transform();
+            return;
+        }
+
+        double mx, my;
+        glfwGetCursorPos(win, &mx, &my);
+        if (!mouse_in_viewport(mx, my)) return;
+        if (g_meshes.empty()) return;
+
+        glm::vec3 rayO, rayD;
+        screen_to_ray(mx, my, rayO, rayD);
+
+        auto& mesh = g_meshes[g_selectedMesh];
+        bool shift = (mods & GLFW_MOD_SHIFT) != 0;
+        if (!shift) mesh.deselect_all();
+
+        switch (g_uiState.selectMode) {
+            case rf::SelectMode::Vertex: {
+                int vi = mesh.pick_vertex(rayO, rayD);
+                if (vi >= 0) mesh.verts[vi].selected = !mesh.verts[vi].selected || !shift;
+                break;
+            }
+            case rf::SelectMode::Edge: {
+                int ei = mesh.pick_edge(rayO, rayD);
+                if (ei >= 0) mesh.edges[ei].selected = !mesh.edges[ei].selected || !shift;
+                break;
+            }
+            case rf::SelectMode::Face: {
+                int fi = mesh.pick_face(rayO, rayD);
+                if (fi >= 0) mesh.faces[fi].selected = !mesh.faces[fi].selected || !shift;
+                break;
+            }
+            default: break;
+        }
     }
 }
 
@@ -109,8 +281,22 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int)
     if (ImGui::GetIO().WantCaptureKeyboard) return;
     if (action != GLFW_PRESS) return;
 
-    // Numpad views
+    // During transform: axis constraints or cancel
+    if (g_transformMode != 0) {
+        switch (key) {
+            case GLFW_KEY_X: g_grab_axis = (g_grab_axis == 0) ? -1 : 0; return;
+            case GLFW_KEY_Y: g_grab_axis = (g_grab_axis == 1) ? -1 : 1; return;
+            case GLFW_KEY_Z: g_grab_axis = (g_grab_axis == 2) ? -1 : 2; return;
+            case GLFW_KEY_ESCAPE: cancel_transform(); return;
+            case GLFW_KEY_ENTER: confirm_transform(); return;
+            // G during grab = reset to free (double-tap G)
+            case GLFW_KEY_G: if (g_transformMode == 1) { g_grab_axis = -1; } return;
+        }
+        return;
+    }
+
     switch (key) {
+        // Numpad views
         case GLFW_KEY_KP_1: g_camera.yaw = 0;   g_camera.pitch = 0;  break;
         case GLFW_KEY_KP_3: g_camera.yaw = 90;  g_camera.pitch = 0;  break;
         case GLFW_KEY_KP_7: g_camera.yaw = 0;   g_camera.pitch = 89; break;
@@ -118,15 +304,180 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int)
         // Tool shortcuts
         case GLFW_KEY_Q: g_uiState.currentTool = rf::Tool::Select; break;
         case GLFW_KEY_W: g_uiState.currentTool = rf::Tool::Move;   break;
-        case GLFW_KEY_E: g_uiState.currentTool = rf::Tool::Rotate; break;
-        case GLFW_KEY_R: g_uiState.currentTool = rf::Tool::Scale;  break;
 
         // Selection mode
         case GLFW_KEY_1: g_uiState.selectMode = rf::SelectMode::Vertex; break;
         case GLFW_KEY_2: g_uiState.selectMode = rf::SelectMode::Edge;   break;
         case GLFW_KEY_3: g_uiState.selectMode = rf::SelectMode::Face;   break;
         case GLFW_KEY_4: g_uiState.selectMode = rf::SelectMode::Object; break;
+
+        // Grab (G)
+        case GLFW_KEY_G:
+            if (g_uiState.selectMode != rf::SelectMode::Object)
+                start_transform(1);
+            break;
+
+        // Scale (S)
+        case GLFW_KEY_S:
+            if (g_uiState.selectMode != rf::SelectMode::Object)
+                start_transform(2);
+            break;
+
+        // Rotate (R)
+        case GLFW_KEY_R:
+            if (g_uiState.selectMode != rf::SelectMode::Object)
+                start_transform(3);
+            break;
+
+        // Extrude (E) — face mode only
+        case GLFW_KEY_E:
+            if (g_uiState.selectMode == rf::SelectMode::Face && !g_meshes.empty()) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                if (mesh.count_selected_faces() > 0) {
+                    mesh.extrude_selected_faces();
+                    // Auto-enter grab mode along face normal after extrude
+                    start_transform(1);
+                }
+            }
+            break;
+
+        // Delete
+        case GLFW_KEY_DELETE:
+        case GLFW_KEY_BACKSPACE:
+            if (g_uiState.selectMode != rf::SelectMode::Object && !g_meshes.empty()) {
+                g_meshes[g_selectedMesh].delete_selected();
+            }
+            break;
+
+        // A = select all / deselect all
+        case GLFW_KEY_A:
+            if (!g_meshes.empty()) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                // If anything selected, deselect all; else select all
+                bool anySel = false;
+                for (auto& v : mesh.verts) if (v.selected) { anySel = true; break; }
+                if (!anySel) for (auto& e : mesh.edges) if (e.selected) { anySel = true; break; }
+                if (!anySel) for (auto& f : mesh.faces) if (f.selected) { anySel = true; break; }
+
+                if (anySel) {
+                    mesh.deselect_all();
+                } else {
+                    if (g_uiState.selectMode == rf::SelectMode::Vertex)
+                        for (auto& v : mesh.verts) v.selected = true;
+                    else if (g_uiState.selectMode == rf::SelectMode::Edge)
+                        for (auto& e : mesh.edges) e.selected = true;
+                    else if (g_uiState.selectMode == rf::SelectMode::Face)
+                        for (auto& f : mesh.faces) f.selected = true;
+                }
+            }
+            break;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Transform mode update (called each frame when grabbing/scaling/rotating)
+// ---------------------------------------------------------------------------
+static void update_transform(GLFWwindow* win)
+{
+    if (g_transformMode == 0 || g_meshes.empty()) return;
+
+    double mx, my;
+    glfwGetCursorPos(win, &mx, &my);
+
+    auto& mesh = g_meshes[g_selectedMesh];
+
+    if (g_transformMode == 1) {
+        // GRAB: project mouse onto camera plane at grab center depth
+        glm::vec3 rayO, rayD;
+        screen_to_ray(mx, my, rayO, rayD);
+
+        glm::vec3 rayO0, rayD0;
+        screen_to_ray(g_grab_startMX, g_grab_startMY, rayO0, rayD0);
+
+        glm::vec3 camPos = g_camera.get_position();
+        glm::vec3 camDir = glm::normalize(g_camera.target - camPos);
+
+        float denom = glm::dot(rayD, camDir);
+        float denom0 = glm::dot(rayD0, camDir);
+        if (std::abs(denom) < 1e-6f || std::abs(denom0) < 1e-6f) return;
+
+        float t  = glm::dot(g_grab_center - rayO,  camDir) / denom;
+        float t0 = glm::dot(g_grab_center - rayO0, camDir) / denom0;
+
+        glm::vec3 hitNow   = rayO  + rayD  * t;
+        glm::vec3 hitStart = rayO0 + rayD0 * t0;
+        glm::vec3 delta = hitNow - hitStart;
+
+        // Axis constraint
+        if (g_grab_axis == 0) delta = glm::vec3(delta.x, 0, 0);
+        else if (g_grab_axis == 1) delta = glm::vec3(0, delta.y, 0);
+        else if (g_grab_axis == 2) delta = glm::vec3(0, 0, delta.z);
+
+        for (int i = 0; i < (int)g_grab_vertIdx.size(); i++)
+            mesh.verts[g_grab_vertIdx[i]].pos = g_grab_origPos[i] + delta;
+
+    } else if (g_transformMode == 2) {
+        // SCALE: distance from grab center on screen determines scale factor
+        // Project grab center to screen
+        glm::mat4 vp = g_projMat * g_viewMat;
+        glm::vec4 cp = vp * glm::vec4(g_grab_center, 1.0f);
+        float screenCX = (cp.x / cp.w * 0.5f + 0.5f) * g_vpW + g_vpX;
+        float screenCY = (1.0f - (cp.y / cp.w * 0.5f + 0.5f)) * g_vpH + rf::ui_top_bar_height();
+
+        float startDist = (float)std::sqrt(
+            (g_grab_startMX - screenCX) * (g_grab_startMX - screenCX) +
+            (g_grab_startMY - screenCY) * (g_grab_startMY - screenCY));
+        float curDist = (float)std::sqrt(
+            (mx - screenCX) * (mx - screenCX) +
+            (my - screenCY) * (my - screenCY));
+
+        if (startDist < 1.0f) startDist = 1.0f;
+        float scaleFactor = curDist / startDist;
+
+        glm::vec3 center = g_grab_center - mesh.position;
+        for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
+            glm::vec3 offset = g_grab_origPos[i] - center;
+            if (g_grab_axis == 0) offset = glm::vec3(offset.x * scaleFactor, offset.y, offset.z);
+            else if (g_grab_axis == 1) offset = glm::vec3(offset.x, offset.y * scaleFactor, offset.z);
+            else if (g_grab_axis == 2) offset = glm::vec3(offset.x, offset.y, offset.z * scaleFactor);
+            else offset *= scaleFactor;
+            mesh.verts[g_grab_vertIdx[i]].pos = center + offset;
+        }
+
+    } else if (g_transformMode == 3) {
+        // ROTATE: angle from grab center on screen
+        glm::mat4 vp = g_projMat * g_viewMat;
+        glm::vec4 cp = vp * glm::vec4(g_grab_center, 1.0f);
+        float screenCX = (cp.x / cp.w * 0.5f + 0.5f) * g_vpW + g_vpX;
+        float screenCY = (1.0f - (cp.y / cp.w * 0.5f + 0.5f)) * g_vpH + rf::ui_top_bar_height();
+
+        float startAngle = (float)std::atan2(g_grab_startMY - screenCY, g_grab_startMX - screenCX);
+        float curAngle = (float)std::atan2(my - screenCY, mx - screenCX);
+        float angle = curAngle - startAngle;
+
+        // Determine rotation axis
+        glm::vec3 axis;
+        if (g_grab_axis == 0) axis = glm::vec3(1, 0, 0);
+        else if (g_grab_axis == 1) axis = glm::vec3(0, 1, 0);
+        else if (g_grab_axis == 2) axis = glm::vec3(0, 0, 1);
+        else {
+            // Free rotation: rotate around view axis
+            glm::vec3 camPos = g_camera.get_position();
+            axis = glm::normalize(camPos - g_camera.target);
+        }
+
+        glm::mat4 rot = glm::rotate(glm::mat4(1.0f), angle, axis);
+        glm::vec3 center = g_grab_center - mesh.position;
+
+        for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
+            glm::vec3 offset = g_grab_origPos[i] - center;
+            glm::vec3 rotated = glm::vec3(rot * glm::vec4(offset, 1.0f));
+            mesh.verts[g_grab_vertIdx[i]].pos = center + rotated;
+        }
+    }
+
+    mesh.recalc_normals();
+    mesh.rebuild_gpu();
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +493,9 @@ static void render_viewport()
 
     if (vpW < 1 || vpH < 1) return;
 
+    // Cache viewport for picking
+    g_vpX = vpX; g_vpY = vpY; g_vpW = vpW; g_vpH = vpH;
+
     glViewport(vpX, vpY, vpW, vpH);
     glScissor(vpX, vpY, vpW, vpH);
     glEnable(GL_SCISSOR_TEST);
@@ -153,6 +507,10 @@ static void render_viewport()
     glm::mat4 view = g_camera.get_view();
     glm::mat4 proj = g_camera.get_projection(aspect);
     glm::mat4 vp = proj * view;
+
+    // Cache matrices for picking
+    g_viewMat = view;
+    g_projMat = proj;
 
     // Grid
     glEnable(GL_BLEND);
@@ -197,6 +555,165 @@ static void render_viewport()
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDisable(GL_POLYGON_OFFSET_LINE);
+
+    // --- Selection overlay ---
+    if (!g_meshes.empty() && g_uiState.selectMode != rf::SelectMode::Object) {
+        auto& mesh = g_meshes[g_selectedMesh];
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+        glm::mat4 mvp = vp * model;
+
+        if (!g_selVAO) {
+            glGenVertexArrays(1, &g_selVAO);
+            glGenBuffers(1, &g_selVBO);
+        }
+
+        g_wireShader.use();
+        g_wireShader.set_mat4("uMVP", mvp);
+
+        std::vector<float> buf;
+
+        if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+            // Draw all verts as dots, selected ones in orange
+            // Selected verts
+            buf.clear();
+            for (auto& v : mesh.verts) {
+                if (v.selected) {
+                    buf.push_back(v.pos.x);
+                    buf.push_back(v.pos.y);
+                    buf.push_back(v.pos.z);
+                }
+            }
+            if (!buf.empty()) {
+                glBindVertexArray(g_selVAO);
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+
+                g_wireShader.set_vec3("uColor", kSelectColor);
+                glPointSize(8.0f);
+                glDisable(GL_DEPTH_TEST);
+                glDrawArrays(GL_POINTS, 0, (int)buf.size() / 3);
+                glEnable(GL_DEPTH_TEST);
+            }
+
+            // Unselected verts as small white dots
+            buf.clear();
+            for (auto& v : mesh.verts) {
+                if (!v.selected) {
+                    buf.push_back(v.pos.x);
+                    buf.push_back(v.pos.y);
+                    buf.push_back(v.pos.z);
+                }
+            }
+            if (!buf.empty()) {
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+
+                g_wireShader.set_vec3("uColor", {0.9f, 0.9f, 0.9f});
+                glPointSize(4.0f);
+                glDrawArrays(GL_POINTS, 0, (int)buf.size() / 3);
+            }
+        }
+        else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+            buf.clear();
+            for (auto& e : mesh.edges) {
+                if (!e.selected) continue;
+                int he = e.he;
+                int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                int vb = mesh.hedges[he].vertex;
+                auto& pa = mesh.verts[va].pos;
+                auto& pb = mesh.verts[vb].pos;
+                buf.push_back(pa.x); buf.push_back(pa.y); buf.push_back(pa.z);
+                buf.push_back(pb.x); buf.push_back(pb.y); buf.push_back(pb.z);
+            }
+            if (!buf.empty()) {
+                glBindVertexArray(g_selVAO);
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+
+                g_wireShader.set_vec3("uColor", kSelectColor);
+                glLineWidth(3.0f);
+                glDisable(GL_DEPTH_TEST);
+                glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
+                glEnable(GL_DEPTH_TEST);
+                glLineWidth(1.0f);
+            }
+        }
+        else if (g_uiState.selectMode == rf::SelectMode::Face) {
+            buf.clear();
+            for (auto& f : mesh.faces) {
+                if (!f.selected) continue;
+                std::vector<int> fv;
+                int start = f.edge;
+                int cur = start;
+                do {
+                    fv.push_back(mesh.hedges[cur].vertex);
+                    cur = mesh.hedges[cur].next;
+                } while (cur != start && (int)fv.size() < 64);
+
+                for (int i = 1; i + 1 < (int)fv.size(); i++) {
+                    int vi[3] = {fv[0], fv[i], fv[i+1]};
+                    for (int k = 0; k < 3; k++) {
+                        auto& p = mesh.verts[vi[k]].pos;
+                        buf.push_back(p.x); buf.push_back(p.y); buf.push_back(p.z);
+                    }
+                }
+            }
+            if (!buf.empty()) {
+                glBindVertexArray(g_selVAO);
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+
+                g_wireShader.set_vec3("uColor", kSelectColor);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glDepthFunc(GL_LEQUAL);
+                // Draw slightly in front
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(-2.0f, -2.0f);
+                glDrawArrays(GL_TRIANGLES, 0, (int)buf.size() / 3);
+                glDisable(GL_POLYGON_OFFSET_FILL);
+                glDepthFunc(GL_LESS);
+                glDisable(GL_BLEND);
+            }
+        }
+
+        // Draw axis indicator during transform
+        if (g_transformMode != 0 && g_grab_axis >= 0) {
+            float len = 2.0f;
+            glm::vec3 center = g_grab_center - mesh.position;
+            glm::vec3 dir(0);
+            dir[g_grab_axis] = len;
+            buf.clear();
+            glm::vec3 a = center - dir;
+            glm::vec3 b = center + dir;
+            buf.push_back(a.x); buf.push_back(a.y); buf.push_back(a.z);
+            buf.push_back(b.x); buf.push_back(b.y); buf.push_back(b.z);
+
+            glBindVertexArray(g_selVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+            glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+            glEnableVertexAttribArray(0);
+
+            g_wireShader.set_vec3("uColor", kAxisColors[g_grab_axis]);
+            glLineWidth(2.0f);
+            glDisable(GL_DEPTH_TEST);
+            glDrawArrays(GL_LINES, 0, 2);
+            glEnable(GL_DEPTH_TEST);
+            glLineWidth(1.0f);
+        }
+
+        glBindVertexArray(0);
+    }
+
     glDisable(GL_SCISSOR_TEST);
 
     // Restore full viewport for UI
@@ -282,6 +799,9 @@ int main()
     // Main loop
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
+
+        // Update transform mode (grab/scale/rotate)
+        update_transform(win);
 
         // Clear full window
         glViewport(0, 0, g_winW, g_winH);

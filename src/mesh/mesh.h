@@ -70,6 +70,23 @@ struct Mesh {
 
     // Export
     bool export_obj(const std::string& path) const;
+
+    // Picking (returns -1 if nothing hit)
+    int pick_vertex(const glm::vec3& rayO, const glm::vec3& rayD, float threshold = 0.08f) const;
+    int pick_edge(const glm::vec3& rayO, const glm::vec3& rayD, float threshold = 0.05f) const;
+    int pick_face(const glm::vec3& rayO, const glm::vec3& rayD) const;
+    void deselect_all();
+
+    // Edit operations
+    void extrude_selected_faces();
+    void delete_selected();
+    void translate_selected(const glm::vec3& delta);
+    std::vector<int> get_selected_vert_indices() const;
+    glm::vec3 get_selection_center() const;
+    glm::vec3 get_selected_face_normal() const;
+    int count_selected_faces() const;
+    int count_selected_verts() const;
+    int count_selected_edges() const;
 };
 
 } // namespace rf

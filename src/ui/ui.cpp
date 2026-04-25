@@ -432,9 +432,11 @@ void ui_objects_panel(UIState& state)
 
     // Header
     ImGui::Text("OBJECTS");
-    ImGui::SameLine(rightPanelWidth() - s(31));
+    ImGui::SameLine(rightPanelWidth() - s(35));
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
-    if (ImGui::Button("+", {s(17), s(17)})) { /* TODO: add primitive */ }
+    if (g_iconFont) ImGui::PushFont(g_iconFont);
+    if (ImGui::Button("\xEE\x85\x85##addobj", {s(24), s(24)})) { /* TODO: add primitive */ }
+    if (g_iconFont) ImGui::PopFont();
     ImGui::PopStyleColor();
 
     ImGui::Separator();
@@ -445,8 +447,15 @@ void ui_objects_panel(UIState& state)
     ImGui::Button("Cube", {rightPanelWidth() - s(43), s(23)});
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
-    ImGui::Text("eye");
-    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.25f, 0.25f, 0.28f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0, 0, 0, 0});
+    if (g_iconFont) ImGui::PushFont(g_iconFont);
+    static bool s_visible = true;
+    const char* eyeIcon = s_visible ? "\xEE\xA3\xB4" : "\xEE\xA3\xB5";  // U+E8F4 / U+E8F5
+    if (ImGui::Button(eyeIcon, {s(24), s(24)})) s_visible = !s_visible;
+    if (g_iconFont) ImGui::PopFont();
+    ImGui::PopStyleColor(4);
     ImGui::PopStyleColor();
 
     ImGui::End();
