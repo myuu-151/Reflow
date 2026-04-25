@@ -766,6 +766,12 @@ void ui_viewport_overlay(UIState& state)
                 { state.unlit = false; state.fresnel = false; }
             if (ImGui::Checkbox("Fresnel", &state.fresnel) && state.fresnel)
                 { state.unlit = false; state.toon = false; }
+            ImGui::Checkbox("Specular", &state.specular);
+            if (state.specular) {
+                ImGui::PushItemWidth(120 * state.uiScale);
+                ImGui::SliderFloat("Roughness", &state.specRoughness, 0.0f, 1.0f, "%.2f");
+                ImGui::PopItemWidth();
+            }
 
             ImGui::Spacing();
 
@@ -777,18 +783,16 @@ void ui_viewport_overlay(UIState& state)
                 float rampH = s(12);
                 float handleH = s(8);
 
-                // Sort stops by position, track selected
-                float selPos = (selectedStop >= 0 && selectedStop < (int)stops.size()) ? stops[selectedStop].first : -1;
-                std::sort(stops.begin(), stops.end(),
-                    [](auto& a, auto& b){ return a.first < b.first; });
-                if (selPos >= 0) {
-                    for (int i = 0; i < (int)stops.size(); i++)
-                        if (stops[i].first == selPos) { selectedStop = i; break; }
-                }
+                // Sort stops by position, track selected — only when not dragging
+                static bool wasDragging = false;
+                bool anyDragging = false;
 
                 // + / - buttons
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(3), s(1)});
-                if (ImGui::Button("+##ramp")) {
+                float btnH = ImGui::GetFrameHeight();
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(4), s(0)});
+                ImGui::PushStyleColor(ImGuiCol_Button, {0.22f, 0.22f, 0.26f, 1.0f});
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.30f, 0.30f, 0.35f, 1.0f});
+                if (ImGui::Button("+##ramp", {btnH, btnH})) {
                     // Add stop at midpoint of selected stop and its neighbor
                     float newT = 0.5f;
                     if (selectedStop < (int)stops.size() - 1)
@@ -807,12 +811,13 @@ void ui_viewport_overlay(UIState& state)
                     stops.push_back({newT, bri});
                     selectedStop = (int)stops.size() - 1;
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("-##ramp") && (int)stops.size() > 2 && selectedStop > 0 && selectedStop < (int)stops.size() - 1) {
+                ImGui::SameLine(0, s(1));
+                if (ImGui::Button("-##ramp", {btnH, btnH}) && (int)stops.size() > 2 && selectedStop > 0 && selectedStop < (int)stops.size() - 1) {
                     stops.erase(stops.begin() + selectedStop);
                     if (selectedStop >= (int)stops.size()) selectedStop = (int)stops.size() - 1;
                 }
-                ImGui::SameLine();
+                ImGui::PopStyleColor(2);
+                ImGui::SameLine(0, s(4));
                 const char* interpNames[] = {"Ease", "Cardinal", "Linear", "B-Spline", "Constant"};
                 int interpIdx = (int)state.rampInterp;
                 ImGui::SetNextItemWidth(s(45));
@@ -831,19 +836,20 @@ void ui_viewport_overlay(UIState& state)
                 ImVec2 rPos = ImGui::GetCursorScreenPos();
                 ImDrawList* rdl = ImGui::GetWindowDrawList();
 
-                // Re-sort after potential add
-                std::sort(stops.begin(), stops.end(),
+                // Sort a copy for gradient drawing, keep original order for handle drag
+                auto sortedStops = stops;
+                std::sort(sortedStops.begin(), sortedStops.end(),
                     [](auto& a, auto& b){ return a.first < b.first; });
 
                 // Helper: sample ramp at position t using current interpolation
                 auto sampleRampUI = [&](float t) -> float {
-                    if (stops.empty()) return 0.0f;
-                    if (t <= stops[0].first) return stops[0].second;
-                    if (t >= stops.back().first) return stops.back().second;
-                    for (int i = 0; i < (int)stops.size() - 1; i++) {
-                        if (t >= stops[i].first && t <= stops[i + 1].first) {
-                            float f = (t - stops[i].first) / (stops[i + 1].first - stops[i].first);
-                            float v0 = stops[i].second, v1 = stops[i + 1].second;
+                    if (sortedStops.empty()) return 0.0f;
+                    if (t <= sortedStops[0].first) return sortedStops[0].second;
+                    if (t >= sortedStops.back().first) return sortedStops.back().second;
+                    for (int i = 0; i < (int)sortedStops.size() - 1; i++) {
+                        if (t >= sortedStops[i].first && t <= sortedStops[i + 1].first) {
+                            float f = (t - sortedStops[i].first) / (sortedStops[i + 1].first - sortedStops[i].first);
+                            float v0 = sortedStops[i].second, v1 = sortedStops[i + 1].second;
                             switch (state.rampInterp) {
                             case UIState::RampInterp::Constant:
                                 return v0;
@@ -914,6 +920,7 @@ void ui_viewport_overlay(UIState& state)
                         selectedStop = si;
 
                     if (ImGui::IsItemActive()) {
+                        anyDragging = true;
                         selectedStop = si;
                         float mx = ImGui::GetIO().MousePos.x - rPos.x;
                         float newT = mx / rampW;
@@ -930,6 +937,17 @@ void ui_viewport_overlay(UIState& state)
                         }
                     }
                 }
+
+                // Sort when drag ends
+                if (wasDragging && !anyDragging) {
+                    float selVal = stops[selectedStop].second;
+                    float selP = stops[selectedStop].first;
+                    std::sort(stops.begin(), stops.end(),
+                        [](auto& a, auto& b){ return a.first < b.first; });
+                    for (int i = 0; i < (int)stops.size(); i++)
+                        if (stops[i].first == selP && stops[i].second == selVal) { selectedStop = i; break; }
+                }
+                wasDragging = anyDragging;
 
                 ImGui::SetCursorScreenPos({rPos.x, handleY + handleH + s(2)});
                 ImGui::Dummy({0, 0});
@@ -964,6 +982,153 @@ void ui_viewport_overlay(UIState& state)
                     }
                 }
             }
+            // Specular ramp widget
+            if (state.specular) {
+                ImGui::Spacing();
+                ImGui::Text("Specular Ramp");
+
+                static int specSelStop = 0;
+                auto& sStops = state.specRampStops;
+                float sRampW = s(100);
+                float sRampH = s(12);
+                float sHandleH = s(8);
+
+                static bool specWasDrag = false;
+                bool specAnyDrag = false;
+
+                // +/- buttons
+                float sBtnH = ImGui::GetFrameHeight();
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(4), s(0)});
+                ImGui::PushStyleColor(ImGuiCol_Button, {0.22f, 0.22f, 0.26f, 1.0f});
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.30f, 0.30f, 0.35f, 1.0f});
+                if (ImGui::Button("+##spec", {sBtnH, sBtnH})) {
+                    float newT = 0.5f;
+                    if (specSelStop < (int)sStops.size() - 1)
+                        newT = (sStops[specSelStop].first + sStops[specSelStop + 1].first) * 0.5f;
+                    sStops.push_back({newT, 0.5f});
+                    specSelStop = (int)sStops.size() - 1;
+                }
+                ImGui::SameLine(0, s(1));
+                if (ImGui::Button("-##spec", {sBtnH, sBtnH}) && (int)sStops.size() > 2 && specSelStop > 0 && specSelStop < (int)sStops.size() - 1) {
+                    sStops.erase(sStops.begin() + specSelStop);
+                    if (specSelStop >= (int)sStops.size()) specSelStop = (int)sStops.size() - 1;
+                }
+                ImGui::PopStyleColor(2);
+                ImGui::SameLine(0, s(4));
+                const char* sInterpNames[] = {"Ease", "Cardinal", "Linear", "B-Spline", "Constant"};
+                int sInterpIdx = (int)state.specRampInterp;
+                ImGui::SetNextItemWidth(s(45));
+                if (ImGui::BeginCombo("##SpecInterp", sInterpNames[sInterpIdx], ImGuiComboFlags_NoArrowButton)) {
+                    for (int i = 0; i < 5; i++) {
+                        bool sel = (i == sInterpIdx);
+                        if (ImGui::Selectable(sInterpNames[i], sel))
+                            state.specRampInterp = (UIState::RampInterp)i;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::PopStyleVar();
+
+                // Gradient bar
+                ImVec2 sPos = ImGui::GetCursorScreenPos();
+                ImDrawList* sdl = ImGui::GetWindowDrawList();
+                auto sortedSpec = sStops;
+                std::sort(sortedSpec.begin(), sortedSpec.end(),
+                    [](auto& a, auto& b){ return a.first < b.first; });
+
+                auto sampleSpec = [&](float t) -> float {
+                    if (sortedSpec.empty()) return 0.0f;
+                    if (t <= sortedSpec[0].first) return sortedSpec[0].second;
+                    if (t >= sortedSpec.back().first) return sortedSpec.back().second;
+                    for (int i = 0; i < (int)sortedSpec.size() - 1; i++) {
+                        if (t >= sortedSpec[i].first && t <= sortedSpec[i + 1].first) {
+                            float f = (t - sortedSpec[i].first) / (sortedSpec[i + 1].first - sortedSpec[i].first);
+                            float v0 = sortedSpec[i].second, v1 = sortedSpec[i + 1].second;
+                            if (state.specRampInterp == UIState::RampInterp::Constant) return v0;
+                            if (state.specRampInterp != UIState::RampInterp::Linear)
+                                f = f * f * (3.0f - 2.0f * f);
+                            return v0 + f * (v1 - v0);
+                        }
+                    }
+                    return sortedSpec.back().second;
+                };
+
+                int sPxW = (int)sRampW;
+                for (int px = 0; px < sPxW; px++) {
+                    float t = (float)px / (float)sPxW;
+                    float val = sampleSpec(t);
+                    int b = std::min(255, std::max(0, (int)(val * 255)));
+                    sdl->AddRectFilled({sPos.x + px, sPos.y}, {sPos.x + px + 1, sPos.y + sRampH}, IM_COL32(b, b, b, 255));
+                }
+                sdl->AddRect(sPos, {sPos.x + sRampW, sPos.y + sRampH}, IM_COL32(80, 80, 90, 255));
+                ImGui::InvisibleButton("##SpecBar", {sRampW, sRampH});
+
+                // Handles
+                float sHandleY = sPos.y + sRampH;
+                for (int si = 0; si < (int)sStops.size(); si++) {
+                    float hx = sPos.x + sStops[si].first * sRampW;
+                    float hy = sHandleY;
+                    int bv = (int)(sStops[si].second * 255);
+                    bool sel = (si == specSelStop);
+                    ImVec2 pts[5] = {
+                        {hx, hy}, {hx - s(4), hy + s(3)}, {hx - s(4), hy + sHandleH},
+                        {hx + s(4), hy + sHandleH}, {hx + s(4), hy + s(3)},
+                    };
+                    sdl->AddConvexPolyFilled(pts, 5, sel ? IM_COL32(220, 220, 220, 255) : IM_COL32(140, 140, 140, 255));
+                    sdl->AddRectFilled({hx - s(2.5f), hy + s(3)}, {hx + s(2.5f), hy + sHandleH - s(0.5f)}, IM_COL32(bv, bv, bv, 255));
+                    if (sel) sdl->AddPolyline(pts, 5, IM_COL32(255, 255, 255, 255), ImDrawFlags_Closed, 1.0f);
+
+                    ImGui::SetCursorScreenPos({hx - s(5), hy});
+                    char hid[16]; snprintf(hid, sizeof(hid), "##sh%d", si);
+                    ImGui::InvisibleButton(hid, {s(10), sHandleH});
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) specSelStop = si;
+                    if (ImGui::IsItemActive()) {
+                        specAnyDrag = true;
+                        specSelStop = si;
+                        float mx = ImGui::GetIO().MousePos.x - sPos.x;
+                        float newT = mx / sRampW;
+                        if (newT < 0.0f) newT = 0.0f;
+                        if (newT > 1.0f) newT = 1.0f;
+                        sStops[si].first = newT;
+                        float scroll = ImGui::GetIO().MouseWheel;
+                        if (scroll != 0.0f) {
+                            sStops[si].second += scroll * 0.05f;
+                            if (sStops[si].second < 0.0f) sStops[si].second = 0.0f;
+                            if (sStops[si].second > 1.0f) sStops[si].second = 1.0f;
+                        }
+                    }
+                }
+                if (specWasDrag && !specAnyDrag) {
+                    float sp = sStops[specSelStop].first, sv = sStops[specSelStop].second;
+                    std::sort(sStops.begin(), sStops.end(), [](auto& a, auto& b){ return a.first < b.first; });
+                    for (int i = 0; i < (int)sStops.size(); i++)
+                        if (sStops[i].first == sp && sStops[i].second == sv) { specSelStop = i; break; }
+                }
+                specWasDrag = specAnyDrag;
+                ImGui::SetCursorScreenPos({sPos.x, sHandleY + sHandleH + s(2)});
+                ImGui::Dummy({0, 0});
+
+                // Grayscale picker
+                if (specSelStop >= 0 && specSelStop < (int)sStops.size()) {
+                    float pickW = sRampW, pickH = s(10);
+                    ImVec2 pPos = ImGui::GetCursorScreenPos();
+                    sdl->AddRectFilledMultiColor(pPos, {pPos.x + pickW, pPos.y + pickH},
+                        IM_COL32(0, 0, 0, 255), IM_COL32(255, 255, 255, 255),
+                        IM_COL32(255, 255, 255, 255), IM_COL32(0, 0, 0, 255));
+                    sdl->AddRect(pPos, {pPos.x + pickW, pPos.y + pickH}, IM_COL32(80, 80, 90, 255));
+                    float markerX = pPos.x + sStops[specSelStop].second * pickW;
+                    sdl->AddTriangleFilled({markerX, pPos.y - s(2)}, {markerX - s(2), pPos.y - s(5)}, {markerX + s(2), pPos.y - s(5)}, IM_COL32(255, 255, 255, 255));
+                    ImGui::InvisibleButton("##SpecPick", {pickW, pickH});
+                    if (ImGui::IsItemActive()) {
+                        float mx = ImGui::GetIO().MousePos.x - pPos.x;
+                        float val = mx / pickW;
+                        if (val < 0.0f) val = 0.0f;
+                        if (val > 1.0f) val = 1.0f;
+                        sStops[specSelStop].second = val;
+                    }
+                }
+            }
+
             ImGui::EndPopup();
         }
         ImGui::PopStyleColor();

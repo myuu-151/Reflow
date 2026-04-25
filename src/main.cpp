@@ -821,6 +821,24 @@ static void render_viewport()
         glUniform1fv(glGetUniformLocation(g_meshShader.id, "uRampVal"), count, val);
     }
 
+    // Specular — independent ramp
+    g_meshShader.set_int("uSpecular", g_uiState.specular ? 1 : 0);
+    if (g_uiState.specular) {
+        g_meshShader.set_vec3("uViewPos", g_camera.get_position());
+        g_meshShader.set_float("uSpecRoughness", g_uiState.specRoughness);
+        auto& stops = g_uiState.specRampStops;
+        int count = std::min((int)stops.size(), 16);
+        g_meshShader.set_int("uSpecRampCount", count);
+        g_meshShader.set_int("uSpecRampInterp", (int)g_uiState.specRampInterp);
+        float pos[16] = {}, val[16] = {};
+        for (int i = 0; i < count; i++) {
+            pos[i] = stops[i].first;
+            val[i] = stops[i].second;
+        }
+        glUniform1fv(glGetUniformLocation(g_meshShader.id, "uSpecRampPos"), count, pos);
+        glUniform1fv(glGetUniformLocation(g_meshShader.id, "uSpecRampVal"), count, val);
+    }
+
     for (auto& mesh : g_meshes) {
         glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
         glm::mat4 mvp = vp * model;

@@ -105,20 +105,36 @@ uniform int uRampInterp; // 0=Ease, 1=Cardinal, 2=Linear, 3=BSpline, 4=Constant
 uniform float uRampPos[16];
 uniform float uRampVal[16];
 
-float sampleRamp(float t) {
-    if (uRampCount < 2) return t;
-    if (t <= uRampPos[0]) return uRampVal[0];
-    if (t >= uRampPos[uRampCount - 1]) return uRampVal[uRampCount - 1];
-    for (int i = 0; i < uRampCount - 1; i++) {
-        if (t >= uRampPos[i] && t <= uRampPos[i + 1]) {
-            float f = (t - uRampPos[i]) / (uRampPos[i + 1] - uRampPos[i]);
-            if (uRampInterp == 4) return uRampVal[i]; // Constant
-            if (uRampInterp == 0 || uRampInterp == 1 || uRampInterp == 3)
+// Specular
+uniform int uSpecular;
+uniform float uSpecRoughness;
+uniform int uSpecRampCount;
+uniform int uSpecRampInterp;
+uniform float uSpecRampPos[16];
+uniform float uSpecRampVal[16];
+
+float sampleRampGeneric(float t, int count, int interp, float pos[16], float val[16]) {
+    if (count < 2) return t;
+    if (t <= pos[0]) return val[0];
+    if (t >= pos[count - 1]) return val[count - 1];
+    for (int i = 0; i < count - 1; i++) {
+        if (t >= pos[i] && t <= pos[i + 1]) {
+            float f = (t - pos[i]) / (pos[i + 1] - pos[i]);
+            if (interp == 4) return val[i]; // Constant
+            if (interp == 0 || interp == 1 || interp == 3)
                 f = f * f * (3.0 - 2.0 * f); // smoothstep for Ease/Cardinal/BSpline
-            return mix(uRampVal[i], uRampVal[i + 1], f);
+            return mix(val[i], val[i + 1], f);
         }
     }
     return t;
+}
+
+float sampleRamp(float t) {
+    return sampleRampGeneric(t, uRampCount, uRampInterp, uRampPos, uRampVal);
+}
+
+float sampleSpecRamp(float t) {
+    return sampleRampGeneric(t, uSpecRampCount, uSpecRampInterp, uSpecRampPos, uSpecRampVal);
 }
 
 out vec4 FragColor;
@@ -138,6 +154,16 @@ void main() {
         float rim = 1.0 - max(dot(n, viewDir), 0.0);
         float rimMapped = sampleRamp(rim);
         col += vec3(rimMapped);
+    }
+
+    if (uSpecular == 1) {
+        vec3 viewDir = normalize(uViewPos - vWorldPos);
+        vec3 halfDir = normalize(normalize(uLightDir) + viewDir);
+        float spec = max(dot(n, halfDir), 0.0);
+        float shininess = mix(256.0, 2.0, uSpecRoughness);
+        spec = pow(spec, shininess);
+        float specMapped = sampleSpecRamp(spec);
+        col += vec3(specMapped);
     }
 
     FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);

@@ -861,10 +861,16 @@ bool save_project(const std::string& path, const std::vector<Mesh>& meshes, cons
         f << "unlit " << (ui->unlit ? 1 : 0) << "\n";
         f << "toon " << (ui->toon ? 1 : 0) << "\n";
         f << "fresnel " << (ui->fresnel ? 1 : 0) << "\n";
+        f << "specular " << (ui->specular ? 1 : 0) << "\n";
+        f << "specRoughness " << ui->specRoughness << "\n";
         f << "rampInterp " << (int)ui->rampInterp << "\n";
         f << "rampStops " << ui->rampStops.size() << "\n";
         for (auto& s : ui->rampStops)
             f << "rs " << s.first << " " << s.second << "\n";
+        f << "specRampInterp " << (int)ui->specRampInterp << "\n";
+        f << "specRampStops " << ui->specRampStops.size() << "\n";
+        for (auto& s : ui->specRampStops)
+            f << "srs " << s.first << " " << s.second << "\n";
         f << "endmaterial\n";
     }
 
@@ -1021,6 +1027,8 @@ bool load_project(const std::string& path, std::vector<Mesh>& meshes, UIState* u
                 else if (key == "unlit") { int v; iss >> v; ui->unlit = (v != 0); }
                 else if (key == "toon") { int v; iss >> v; ui->toon = (v != 0); }
                 else if (key == "fresnel") { int v; iss >> v; ui->fresnel = (v != 0); }
+                else if (key == "specular") { int v; iss >> v; ui->specular = (v != 0); }
+                else if (key == "specRoughness") { iss >> ui->specRoughness; }
                 else if (key == "rampInterp") { int v; iss >> v; ui->rampInterp = (UIState::RampInterp)v; }
                 else if (key == "rampStops") {
                     int count; iss >> count;
@@ -1031,6 +1039,18 @@ bool load_project(const std::string& path, std::vector<Mesh>& meshes, UIState* u
                         std::string tag; float pos, val;
                         rss >> tag >> pos >> val;
                         ui->rampStops.push_back({pos, val});
+                    }
+                }
+                else if (key == "specRampInterp") { int v; iss >> v; ui->specRampInterp = (UIState::RampInterp)v; }
+                else if (key == "specRampStops") {
+                    int count; iss >> count;
+                    ui->specRampStops.clear();
+                    for (int i = 0; i < count; i++) {
+                        if (!std::getline(f, line)) break;
+                        std::istringstream rss(line);
+                        std::string tag; float pos, val;
+                        rss >> tag >> pos >> val;
+                        ui->specRampStops.push_back({pos, val});
                     }
                 }
             }
