@@ -562,16 +562,18 @@ static void render_viewport()
         glDrawArrays(GL_TRIANGLES, 0, mesh.triCount * 3);
     }
 
-    // Wireframe overlay (actual edges, not triangulated)
-    g_wireShader.use();
-    for (auto& mesh : g_meshes) {
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
-        glm::mat4 mvp = vp * model;
-        g_wireShader.set_mat4("uMVP", mvp);
-        g_wireShader.set_vec3("uColor", kWireColor);
+    // Wireframe overlay (only in edit modes, not object mode)
+    if (g_uiState.selectMode != rf::SelectMode::Object) {
+        g_wireShader.use();
+        for (auto& mesh : g_meshes) {
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+            glm::mat4 mvp = vp * model;
+            g_wireShader.set_mat4("uMVP", mvp);
+            g_wireShader.set_vec3("uColor", kWireColor);
 
-        glBindVertexArray(mesh.wireVao);
-        glDrawArrays(GL_LINES, 0, mesh.wireLineCount * 2);
+            glBindVertexArray(mesh.wireVao);
+            glDrawArrays(GL_LINES, 0, mesh.wireLineCount * 2);
+        }
     }
 
     // --- Object mode silhouette outline (back-face method) ---
