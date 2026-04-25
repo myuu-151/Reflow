@@ -175,7 +175,7 @@ void ui_init(GLFWwindow* win)
 
     // Load properties tab icons
     const char* propTabFiles[] = {
-        "res/icon_object.png",
+        "res/icon_object_prop.png",
         "res/icon_material.png",
     };
     for (int i = 0; i < 2; i++) {
@@ -616,7 +616,8 @@ void ui_properties_panel(UIState& state)
     // Tab icons
     {
         float iconSz = s(18);
-        float pad = s(3);
+        float padObj = s(3);
+        float padMat = s(1.75f);
         const char* tabLabels[] = {"##PropObj", "##PropMat"};
         for (int i = 0; i < 2; i++) {
             if (i > 0) ImGui::SameLine(0, s(2));
@@ -635,10 +636,11 @@ void ui_properties_panel(UIState& state)
                 g_propTab = i;
 
             if (g_propTabTex[i]) {
+                float p = (i == 0) ? padObj : padMat;
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 dl->AddImage((ImTextureID)(intptr_t)g_propTabTex[i],
-                    {btnPos.x + pad, btnPos.y + pad},
-                    {btnPos.x + iconSz - pad, btnPos.y + iconSz - pad});
+                    {btnPos.x + p, btnPos.y + p},
+                    {btnPos.x + iconSz - p, btnPos.y + iconSz - p});
             }
 
             ImGui::PopStyleColor(2);
