@@ -200,11 +200,10 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
         g_rmb_down = (action == GLFW_PRESS);
         glfwGetCursorPos(win, &g_lastX, &g_lastY);
 
-        // RMB: confirm transform or pick elements
+        // RMB: confirm transform and/or pick elements
         if (action == GLFW_PRESS) {
             if (g_transformMode != 0) {
                 confirm_transform();
-                return;
             }
 
             double mx, my;
@@ -280,7 +279,7 @@ static void cb_scroll(GLFWwindow*, double, double dy)
 
 static void cb_key(GLFWwindow* win, int key, int, int action, int)
 {
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
+    if (ImGui::GetIO().WantTextInput) return;
     if (action != GLFW_PRESS) return;
 
     // During transform: axis constraints or cancel
