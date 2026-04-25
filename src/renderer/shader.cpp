@@ -75,11 +75,13 @@ uniform mat4 uMVP;
 uniform mat4 uModel;
 
 out vec3 vNormal;
+out vec3 vWorldPos;
 out vec2 vUV;
 
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
     vNormal = mat3(uModel) * aNormal;
+    vWorldPos = vec3(uModel * vec4(aPos, 1.0));
     vUV = aUV;
 }
 )";
@@ -87,11 +89,32 @@ void main() {
     const char* frag = R"(
 #version 330 core
 in vec3 vNormal;
+in vec3 vWorldPos;
 in vec2 vUV;
 
 uniform vec3 uColor;
 uniform vec3 uLightDir;
 uniform float uAmbient;
+
+// Fresnel
+uniform int uFresnel;
+uniform vec3 uViewPos;
+uniform int uRampCount;
+uniform float uRampPos[16];
+uniform float uRampVal[16];
+
+float sampleRamp(float t) {
+    if (uRampCount < 2) return t;
+    if (t <= uRampPos[0]) return uRampVal[0];
+    if (t >= uRampPos[uRampCount - 1]) return uRampVal[uRampCount - 1];
+    for (int i = 0; i < uRampCount - 1; i++) {
+        if (t >= uRampPos[i] && t <= uRampPos[i + 1]) {
+            float f = (t - uRampPos[i]) / (uRampPos[i + 1] - uRampPos[i]);
+            return mix(uRampVal[i], uRampVal[i + 1], f);
+        }
+    }
+    return t;
+}
 
 out vec4 FragColor;
 
@@ -99,7 +122,15 @@ void main() {
     vec3 n = normalize(vNormal);
     float diff = max(dot(n, normalize(uLightDir)), 0.0);
     vec3 col = uColor * (uAmbient + (1.0 - uAmbient) * diff);
-    FragColor = vec4(col, 1.0);
+
+    if (uFresnel == 1) {
+        vec3 viewDir = normalize(uViewPos - vWorldPos);
+        float rim = 1.0 - max(dot(n, viewDir), 0.0);
+        float rimMapped = sampleRamp(rim);
+        col += vec3(rimMapped);
+    }
+
+    FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 )";
 

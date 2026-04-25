@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/reflow.h"
+#include "mesh/mesh.h"
 #include "imgui.h"
 
 namespace rf {
@@ -44,9 +45,19 @@ struct UIState {
     float uiScale = 2.5f;
     UIAction pendingAction = UIAction::None;
     bool pendingFrameSelected = false;
+    int pendingSelectMesh = -1;    // request to select mesh by index
+
+    // Pointers to scene data (set by main)
+    std::vector<Mesh>* meshes = nullptr;
+    int* selectedMesh = nullptr;
+    bool* objectSelected = nullptr;
     float lightAngleX = 0.0f;  // textured mode light horizontal angle
     float lightAngleY = 45.0f; // textured mode light vertical angle
     bool unlit = false;        // fullbright / unlit mode
+    bool toon = false;         // toon shading (placeholder)
+    bool fresnel = false;      // fresnel effect (placeholder)
+    // Ramp stops: {position (0-1), brightness (0-1)}
+    std::vector<std::pair<float,float>> rampStops = {{0.0f, 0.0f}, {1.0f, 1.0f}};
 };
 
 void ui_init(GLFWwindow* win);

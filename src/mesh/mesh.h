@@ -49,6 +49,9 @@ struct Mesh {
     // Mirror mode
     bool mirrorX = false;
 
+    // Shading
+    bool shadeSmooth = false;
+
     // Transform
     glm::vec3 position = {0, 0, 0};
     glm::vec3 rotation = {0, 0, 0};

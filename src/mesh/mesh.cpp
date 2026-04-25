@@ -17,7 +17,27 @@ void Mesh::rebuild_gpu()
     std::vector<float> buf;
     triCount = 0;
 
-    for (auto& f : faces) {
+    // Compute smooth vertex normals if needed
+    std::vector<glm::vec3> vertNormals;
+    if (shadeSmooth) {
+        vertNormals.resize(verts.size(), glm::vec3(0));
+        for (auto& f : faces) {
+            int start = f.edge;
+            int cur = start;
+            do {
+                int vi = hedges[cur].vertex;
+                vertNormals[vi] += f.normal;
+                cur = hedges[cur].next;
+            } while (cur != start);
+        }
+        for (auto& n : vertNormals) {
+            float len = glm::length(n);
+            if (len > 0.0001f) n /= len;
+        }
+    }
+
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        auto& f = faces[fi];
         // Collect face verts by walking the half-edge loop
         std::vector<int> faceVerts;
         int start = f.edge;
@@ -32,12 +52,13 @@ void Mesh::rebuild_gpu()
             int vi[3] = { faceVerts[0], faceVerts[i], faceVerts[i+1] };
             for (int k = 0; k < 3; k++) {
                 auto& v = verts[vi[k]];
+                glm::vec3 n = shadeSmooth ? vertNormals[vi[k]] : f.normal;
                 buf.push_back(v.pos.x);
                 buf.push_back(v.pos.y);
                 buf.push_back(v.pos.z);
-                buf.push_back(f.normal.x);
-                buf.push_back(f.normal.y);
-                buf.push_back(f.normal.z);
+                buf.push_back(n.x);
+                buf.push_back(n.y);
+                buf.push_back(n.z);
                 buf.push_back(v.uv.x);
                 buf.push_back(v.uv.y);
             }

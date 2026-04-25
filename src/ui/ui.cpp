@@ -6,6 +6,7 @@
 #include <stb_image.h>
 #include <cstdio>
 #include <string>
+#include <algorithm>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -492,22 +493,36 @@ void ui_objects_panel(UIState& state)
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Object list (placeholder — will be driven by actual scene)
-    ImGui::PushStyleColor(ImGuiCol_Button, {0.18f, 0.18f, 0.22f, 1.0f});
-    if (ImGui::Button("Cube", {rightPanelWidth() - s(43), s(23)}))
-        state.pendingFrameSelected = true;
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
-    ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.25f, 0.25f, 0.28f, 1.0f});
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0, 0, 0, 0});
-    if (g_iconFont) ImGui::PushFont(g_iconFont);
-    static bool s_visible = true;
-    const char* eyeIcon = s_visible ? "\xEE\xA3\xB4" : "\xEE\xA3\xB5";  // U+E8F4 / U+E8F5
-    if (ImGui::Button(eyeIcon, {s(24), s(24)})) s_visible = !s_visible;
-    if (g_iconFont) ImGui::PopFont();
-    ImGui::PopStyleColor(4);
-    ImGui::PopStyleColor();
+    // Object list (driven by mesh vector)
+    if (state.meshes && state.selectedMesh) {
+        auto& meshes = *state.meshes;
+        int& sel = *state.selectedMesh;
+        for (int i = 0; i < (int)meshes.size(); i++) {
+            bool isSelected = (state.objectSelected && *state.objectSelected && i == sel);
+            ImVec4 btnCol = isSelected ? ImVec4(0.25f, 0.25f, 0.32f, 1.0f) : ImVec4(0.18f, 0.18f, 0.22f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
+            char label[64];
+            snprintf(label, sizeof(label), "%s##obj%d", meshes[i].name.c_str(), i);
+            if (ImGui::Button(label, {rightPanelWidth() - s(43), s(23)})) {
+                sel = i;
+                if (state.objectSelected) *state.objectSelected = true;
+                state.pendingFrameSelected = true;
+            }
+            ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
+            ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.25f, 0.25f, 0.28f, 1.0f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0, 0, 0, 0});
+            if (g_iconFont) ImGui::PushFont(g_iconFont);
+            char eyeId[16]; snprintf(eyeId, sizeof(eyeId), "##eye%d", i);
+            const char* eyeIcon = "\xEE\xA3\xB4";
+            ImGui::Button(eyeIcon, {s(24), s(24)});
+            if (g_iconFont) ImGui::PopFont();
+            ImGui::PopStyleColor(4);
+        }
+    }
 
     ImGui::End();
 }
@@ -690,7 +705,175 @@ void ui_viewport_overlay(UIState& state)
             dl->AddCircleFilled({dotX, dotY}, dotR, IM_COL32(255, 200, 60, 255));
             dl->AddCircle({dotX, dotY}, dotR, IM_COL32(255, 255, 255, 200), 12, 1.0f);
 
-            ImGui::Checkbox("Unlit", &state.unlit);
+            if (ImGui::Checkbox("Unlit", &state.unlit) && state.unlit)
+                { state.toon = false; state.fresnel = false; }
+            if (ImGui::Checkbox("Toon", &state.toon) && state.toon)
+                { state.unlit = false; state.fresnel = false; }
+            if (ImGui::Checkbox("Fresnel", &state.fresnel) && state.fresnel)
+                { state.unlit = false; state.toon = false; }
+
+            ImGui::Spacing();
+
+            // Gradient ramp widget
+            {
+                static int selectedStop = 0;
+                auto& stops = state.rampStops;
+                float rampW = s(100);
+                float rampH = s(12);
+                float handleH = s(8);
+
+                // Sort stops by position, track selected
+                float selPos = (selectedStop >= 0 && selectedStop < (int)stops.size()) ? stops[selectedStop].first : -1;
+                std::sort(stops.begin(), stops.end(),
+                    [](auto& a, auto& b){ return a.first < b.first; });
+                if (selPos >= 0) {
+                    for (int i = 0; i < (int)stops.size(); i++)
+                        if (stops[i].first == selPos) { selectedStop = i; break; }
+                }
+
+                // + / - buttons
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(3), s(1)});
+                if (ImGui::Button("+##ramp")) {
+                    // Add stop at midpoint of selected stop and its neighbor
+                    float newT = 0.5f;
+                    if (selectedStop < (int)stops.size() - 1)
+                        newT = (stops[selectedStop].first + stops[selectedStop + 1].first) * 0.5f;
+                    else if (selectedStop > 0)
+                        newT = (stops[selectedStop - 1].first + stops[selectedStop].first) * 0.5f;
+                    // Interpolate brightness
+                    float bri = 0.5f;
+                    for (int si = 0; si < (int)stops.size() - 1; si++) {
+                        if (newT >= stops[si].first && newT <= stops[si + 1].first) {
+                            float f = (newT - stops[si].first) / (stops[si + 1].first - stops[si].first);
+                            bri = stops[si].second + f * (stops[si + 1].second - stops[si].second);
+                            break;
+                        }
+                    }
+                    stops.push_back({newT, bri});
+                    selectedStop = (int)stops.size() - 1;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("-##ramp") && (int)stops.size() > 2 && selectedStop > 0 && selectedStop < (int)stops.size() - 1) {
+                    stops.erase(stops.begin() + selectedStop);
+                    if (selectedStop >= (int)stops.size()) selectedStop = (int)stops.size() - 1;
+                }
+                ImGui::PopStyleVar();
+
+                // Gradient bar
+                ImVec2 rPos = ImGui::GetCursorScreenPos();
+                ImDrawList* rdl = ImGui::GetWindowDrawList();
+
+                // Re-sort after potential add
+                std::sort(stops.begin(), stops.end(),
+                    [](auto& a, auto& b){ return a.first < b.first; });
+
+                // Fill before first stop
+                if (!stops.empty() && stops[0].first > 0.0f) {
+                    int b = (int)(stops[0].second * 255);
+                    rdl->AddRectFilled(rPos, {rPos.x + stops[0].first * rampW, rPos.y + rampH},
+                        IM_COL32(b, b, b, 255));
+                }
+                // Gradient between stops
+                for (int si = 0; si < (int)stops.size() - 1; si++) {
+                    float x0 = rPos.x + stops[si].first * rampW;
+                    float x1 = rPos.x + stops[si + 1].first * rampW;
+                    int b0 = (int)(stops[si].second * 255);
+                    int b1 = (int)(stops[si + 1].second * 255);
+                    rdl->AddRectFilledMultiColor(
+                        {x0, rPos.y}, {x1, rPos.y + rampH},
+                        IM_COL32(b0, b0, b0, 255), IM_COL32(b1, b1, b1, 255),
+                        IM_COL32(b1, b1, b1, 255), IM_COL32(b0, b0, b0, 255));
+                }
+                // Fill after last stop
+                if (!stops.empty() && stops.back().first < 1.0f) {
+                    int b = (int)(stops.back().second * 255);
+                    rdl->AddRectFilled({rPos.x + stops.back().first * rampW, rPos.y},
+                        {rPos.x + rampW, rPos.y + rampH}, IM_COL32(b, b, b, 255));
+                }
+                rdl->AddRect(rPos, {rPos.x + rampW, rPos.y + rampH}, IM_COL32(80, 80, 90, 255));
+                ImGui::InvisibleButton("##RampBar", {rampW, rampH});
+
+                // Handles below the bar
+                float handleY = rPos.y + rampH;
+                for (int si = 0; si < (int)stops.size(); si++) {
+                    float hx = rPos.x + stops[si].first * rampW;
+                    float hy = handleY;
+                    int bv = (int)(stops[si].second * 255);
+                    bool sel = (si == selectedStop);
+
+                    // Handle shape: pentagon/house
+                    ImVec2 pts[5] = {
+                        {hx, hy},
+                        {hx - s(4), hy + s(3)},
+                        {hx - s(4), hy + handleH},
+                        {hx + s(4), hy + handleH},
+                        {hx + s(4), hy + s(3)},
+                    };
+                    ImU32 handleCol = sel ? IM_COL32(220, 220, 220, 255) : IM_COL32(140, 140, 140, 255);
+                    rdl->AddConvexPolyFilled(pts, 5, handleCol);
+                    rdl->AddRectFilled({hx - s(2.5f), hy + s(3)}, {hx + s(2.5f), hy + handleH - s(0.5f)},
+                        IM_COL32(bv, bv, bv, 255));
+                    if (sel) rdl->AddPolyline(pts, 5, IM_COL32(255, 255, 255, 255), ImDrawFlags_Closed, 1.0f);
+
+                    // Interaction
+                    ImGui::SetCursorScreenPos({hx - s(5), hy});
+                    char hid[16]; snprintf(hid, sizeof(hid), "##rh%d", si);
+                    ImGui::InvisibleButton(hid, {s(10), handleH});
+
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                        selectedStop = si;
+
+                    if (ImGui::IsItemActive()) {
+                        selectedStop = si;
+                        float mx = ImGui::GetIO().MousePos.x - rPos.x;
+                        float newT = mx / rampW;
+                        if (newT < 0.0f) newT = 0.0f;
+                        if (newT > 1.0f) newT = 1.0f;
+                        stops[si].first = newT;
+
+                        // Scroll to change brightness
+                        float scroll = ImGui::GetIO().MouseWheel;
+                        if (scroll != 0.0f) {
+                            stops[si].second += scroll * 0.05f;
+                            if (stops[si].second < 0.0f) stops[si].second = 0.0f;
+                            if (stops[si].second > 1.0f) stops[si].second = 1.0f;
+                        }
+                    }
+                }
+
+                ImGui::SetCursorScreenPos({rPos.x, handleY + handleH + s(2)});
+                ImGui::Dummy({0, 0});
+
+                // Grayscale picker for selected stop
+                if (selectedStop >= 0 && selectedStop < (int)stops.size()) {
+                    float pickW = rampW;
+                    float pickH = s(10);
+                    ImVec2 pPos = ImGui::GetCursorScreenPos();
+
+                    // Draw black-to-white gradient
+                    rdl->AddRectFilledMultiColor(pPos, {pPos.x + pickW, pPos.y + pickH},
+                        IM_COL32(0, 0, 0, 255), IM_COL32(255, 255, 255, 255),
+                        IM_COL32(255, 255, 255, 255), IM_COL32(0, 0, 0, 255));
+                    rdl->AddRect(pPos, {pPos.x + pickW, pPos.y + pickH}, IM_COL32(80, 80, 90, 255));
+
+                    // Marker for current brightness
+                    float markerX = pPos.x + stops[selectedStop].second * pickW;
+                    rdl->AddTriangleFilled(
+                        {markerX, pPos.y - s(2)},
+                        {markerX - s(2), pPos.y - s(5)},
+                        {markerX + s(2), pPos.y - s(5)},
+                        IM_COL32(255, 255, 255, 255));
+
+                    ImGui::InvisibleButton("##GrayPick", {pickW, pickH});
+                    if (ImGui::IsItemActive()) {
+                        float mx = ImGui::GetIO().MousePos.x - pPos.x;
+                        float val = mx / pickW;
+                        if (val < 0.0f) val = 0.0f;
+                        if (val > 1.0f) val = 1.0f;
+                        stops[selectedStop].second = val;
+                    }
+                }
+            }
             ImGui::EndPopup();
         }
         ImGui::PopStyleColor();

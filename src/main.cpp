@@ -35,6 +35,8 @@ static int g_selectedMesh = 0;
 static bool g_objectSelected = false;
 
 static rf::UIState g_uiState;
+static bool g_openNormalsMenu = false;
+static bool g_openDeleteConfirm = false;
 
 // Input state
 static bool g_mmb_down = false;
@@ -417,7 +419,7 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
 
         // Tool shortcuts
         case GLFW_KEY_Q: g_uiState.currentTool = rf::Tool::Select; break;
-        case GLFW_KEY_W: g_uiState.currentTool = rf::Tool::Move;   break;
+        case GLFW_KEY_W: g_openNormalsMenu = true; break;
 
         // Selection mode
         case GLFW_KEY_1: g_uiState.selectMode = rf::SelectMode::Vertex; break;
@@ -463,6 +465,12 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                     start_transform(1);
                 }
             }
+            break;
+
+        // X = delete mesh confirmation
+        case GLFW_KEY_X:
+            if (g_uiState.selectMode == rf::SelectMode::Object && !g_meshes.empty() && g_objectSelected)
+                g_openDeleteConfirm = true;
             break;
 
         // Delete
@@ -667,6 +675,22 @@ static void render_viewport()
     } else {
         g_meshShader.set_vec3("uLightDir", glm::normalize(g_camera.get_position() - g_camera.target));
         g_meshShader.set_float("uAmbient", 0.25f);
+    }
+
+    // Fresnel
+    g_meshShader.set_int("uFresnel", g_uiState.fresnel ? 1 : 0);
+    if (g_uiState.fresnel) {
+        g_meshShader.set_vec3("uViewPos", g_camera.get_position());
+        auto& stops = g_uiState.rampStops;
+        int count = std::min((int)stops.size(), 16);
+        g_meshShader.set_int("uRampCount", count);
+        float pos[16] = {}, val[16] = {};
+        for (int i = 0; i < count; i++) {
+            pos[i] = stops[i].first;
+            val[i] = stops[i].second;
+        }
+        glUniform1fv(glGetUniformLocation(g_meshShader.id, "uRampPos"), count, pos);
+        glUniform1fv(glGetUniformLocation(g_meshShader.id, "uRampVal"), count, val);
     }
 
     for (auto& mesh : g_meshes) {
@@ -1095,6 +1119,11 @@ int main()
     rf::ui_load_settings(g_uiState);
     ImGui::GetIO().FontGlobalScale = g_uiState.uiScale;
 
+    // Wire UI to scene data
+    g_uiState.meshes = &g_meshes;
+    g_uiState.selectedMesh = &g_selectedMesh;
+    g_uiState.objectSelected = &g_objectSelected;
+
     // Default scene
     g_meshes.push_back(rf::Mesh::create_cube());
 
@@ -1138,6 +1167,43 @@ int main()
         rf::ui_properties_panel(g_uiState);
         rf::ui_status_bar(g_uiState);
         rf::ui_viewport_overlay(g_uiState);
+
+        // Delete mesh confirmation (X key)
+        if (g_openDeleteConfirm) {
+            ImGui::OpenPopup("##DeleteMesh");
+            g_openDeleteConfirm = false;
+        }
+        if (ImGui::BeginPopup("##DeleteMesh")) {
+            ImGui::Text("Delete \"%s\"?", g_meshes[g_selectedMesh].name.c_str());
+            if (ImGui::MenuItem("Delete")) {
+                g_meshes.erase(g_meshes.begin() + g_selectedMesh);
+                g_objectSelected = false;
+                if (g_selectedMesh >= (int)g_meshes.size())
+                    g_selectedMesh = std::max(0, (int)g_meshes.size() - 1);
+            }
+            ImGui::EndPopup();
+        }
+
+        // Normals menu (W key)
+        if (g_openNormalsMenu) {
+            ImGui::OpenPopup("##NormalsMenu");
+            g_openNormalsMenu = false;
+        }
+        if (ImGui::BeginPopup("##NormalsMenu")) {
+            if (ImGui::MenuItem("Shade Smooth")) {
+                if (!g_meshes.empty()) {
+                    g_meshes[g_selectedMesh].shadeSmooth = true;
+                    g_meshes[g_selectedMesh].rebuild_gpu();
+                }
+            }
+            if (ImGui::MenuItem("Shade Flat")) {
+                if (!g_meshes.empty()) {
+                    g_meshes[g_selectedMesh].shadeSmooth = false;
+                    g_meshes[g_selectedMesh].rebuild_gpu();
+                }
+            }
+            ImGui::EndPopup();
+        }
 
         // Draw box select rectangle
         if (g_boxSelecting) {
