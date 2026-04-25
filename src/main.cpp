@@ -243,24 +243,20 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
                     if (fi >= 0) mesh.faces[fi].selected = !mesh.faces[fi].selected || !shift;
                     break;
                 }
+                case rf::SelectMode::Object: {
+                    int hit = mesh.pick_face(rayO, rayD);
+                    g_objectSelected = (hit >= 0);
+                    break;
+                }
                 default: break;
             }
         }
     }
 
-    // LMB: confirm transform or select/deselect object
+    // LMB: confirm transform
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         if (g_transformMode != 0) {
             confirm_transform();
-        } else if (g_uiState.selectMode == rf::SelectMode::Object) {
-            double mx, my;
-            glfwGetCursorPos(win, &mx, &my);
-            if (mouse_in_viewport(mx, my) && !g_meshes.empty()) {
-                glm::vec3 rayO, rayD;
-                screen_to_ray(mx, my, rayO, rayD);
-                int hit = g_meshes[g_selectedMesh].pick_face(rayO, rayD);
-                g_objectSelected = (hit >= 0);
-            }
         }
     }
 }
@@ -570,8 +566,16 @@ static void render_viewport()
         auto& mesh = g_meshes[g_selectedMesh];
 
         float outlineScale = 1.008f;
-        glm::mat4 scaledModel = glm::translate(glm::mat4(1.0f), mesh.position)
-            * glm::scale(glm::mat4(1.0f), glm::vec3(outlineScale));
+        // Compute actual center of vertices
+        glm::vec3 center(0);
+        for (auto& v : mesh.verts) center += v.pos;
+        center /= (float)mesh.verts.size();
+        center += mesh.position;
+        // Scale around the vertex center, not mesh.position
+        glm::mat4 scaledModel = glm::translate(glm::mat4(1.0f), center)
+            * glm::scale(glm::mat4(1.0f), glm::vec3(outlineScale))
+            * glm::translate(glm::mat4(1.0f), -center)
+            * glm::translate(glm::mat4(1.0f), mesh.position);
 
         g_wireShader.use();
         g_wireShader.set_mat4("uMVP", vp * scaledModel);
