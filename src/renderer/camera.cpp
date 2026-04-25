@@ -39,7 +39,7 @@ void Camera::pan(float dx, float dy)
     glm::vec3 right = glm::normalize(glm::cross(fwd, glm::vec3(0, 1, 0)));
     glm::vec3 up = glm::normalize(glm::cross(right, fwd));
 
-    float scale = distance * panSpeed;
+    float scale = distance * distance * panSpeed * 0.1f;
     target += right * (-dx * scale) + up * (dy * scale);
 }
 
