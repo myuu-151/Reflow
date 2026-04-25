@@ -291,7 +291,7 @@ static void cb_scroll(GLFWwindow*, double, double dy)
     g_camera.zoom((float)dy);
 }
 
-static void cb_key(GLFWwindow* win, int key, int, int action, int)
+static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
 {
     if (ImGui::GetIO().WantTextInput) return;
     if (action != GLFW_PRESS) return;
@@ -326,9 +326,22 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int)
         case GLFW_KEY_3: g_uiState.selectMode = rf::SelectMode::Face;   break;
         case GLFW_KEY_4: g_uiState.selectMode = rf::SelectMode::Object; break;
 
-        // Grab (G)
+        // Grab (G) / Alt+G snap to origin
         case GLFW_KEY_G:
-            start_transform(1);
+            if (mods & GLFW_MOD_ALT) {
+                if (!g_meshes.empty()) {
+                    auto& mesh = g_meshes[g_selectedMesh];
+                    glm::vec3 center(0);
+                    for (auto& v : mesh.verts) center += v.pos;
+                    center /= (float)mesh.verts.size();
+                    for (auto& v : mesh.verts) v.pos -= center;
+                    mesh.position = {0, 0, 0};
+                    mesh.recalc_normals();
+                    mesh.rebuild_gpu();
+                }
+            } else {
+                start_transform(1);
+            }
             break;
 
         // Scale (S)
