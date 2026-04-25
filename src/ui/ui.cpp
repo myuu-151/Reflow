@@ -613,7 +613,7 @@ void ui_viewport_overlay(UIState& state)
     // Viewport shading mode buttons — top right of viewport
     {
         float vpW = vp->Size.x - toolbarWidth() - rightPanelWidth();
-        float btnSz = s(22);
+        float btnSz = s(18);
         float gap = s(3);
         float pad = ImGui::GetStyle().FramePadding.x;
         float totalW = (btnSz + pad * 2) * 3 + gap * 2;
