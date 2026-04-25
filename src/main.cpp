@@ -129,25 +129,6 @@ static glm::vec2 world_to_screen(const glm::vec3& pos, const glm::mat4& mvp)
     return {sx, sy};
 }
 
-// Check if a world-space point is visible (not occluded) by reading the depth buffer
-static bool is_point_visible(const glm::vec3& pos, const glm::mat4& mvp, const float* depthBuf, int dbW, int dbH)
-{
-    glm::vec4 clip = mvp * glm::vec4(pos, 1.0f);
-    if (clip.w <= 0) return false;
-    float ndcX = clip.x / clip.w;
-    float ndcY = clip.y / clip.w;
-    float ndcZ = clip.z / clip.w;
-    float vertDepth = ndcZ * 0.5f + 0.5f; // [0,1] range
-
-    // Convert NDC to pixel coords in the depth buffer (which covers the GL viewport)
-    int px = (int)((ndcX * 0.5f + 0.5f) * dbW);
-    int py = (int)((ndcY * 0.5f + 0.5f) * dbH);
-    if (px < 0 || px >= dbW || py < 0 || py >= dbH) return false;
-
-    float bufDepth = depthBuf[py * dbW + px];
-    return vertDepth <= bufDepth + 0.005f; // small bias
-}
-
 static void finish_box_select()
 {
     if (g_meshes.empty() || g_uiState.editorMode != rf::EditorMode::Model) return;
@@ -160,18 +141,53 @@ static void finish_box_select()
     float minY = (float)std::min(g_boxStartY, g_boxEndY);
     float maxY = (float)std::max(g_boxStartY, g_boxEndY);
 
-    // Read depth buffer for occlusion testing
-    std::vector<float> depthBuf(g_vpW * g_vpH);
-    glReadPixels(g_vpX, 0, g_vpW, g_vpH, GL_DEPTH_COMPONENT, GL_FLOAT, depthBuf.data());
+    // Camera direction in model space for back-face culling
+    glm::vec3 camPos = g_camera.get_position() - mesh.position;
+
+    // Precompute which faces are front-facing
+    std::vector<bool> faceFront(mesh.faces.size(), false);
+    for (int i = 0; i < (int)mesh.faces.size(); i++) {
+        // Compute face normal from first 3 verts
+        std::vector<int> fv;
+        int start = mesh.faces[i].edge;
+        int cur = start;
+        do {
+            fv.push_back(mesh.hedges[cur].vertex);
+            cur = mesh.hedges[cur].next;
+        } while (cur != start && (int)fv.size() < 64);
+        if (fv.size() < 3) continue;
+        glm::vec3 a = mesh.verts[fv[0]].pos;
+        glm::vec3 b = mesh.verts[fv[1]].pos;
+        glm::vec3 c = mesh.verts[fv[2]].pos;
+        glm::vec3 fn = glm::cross(b - a, c - a);
+        glm::vec3 faceCenter = a;
+        for (int j = 1; j < (int)fv.size(); j++) faceCenter += mesh.verts[fv[j]].pos;
+        faceCenter /= (float)fv.size();
+        glm::vec3 toCamera = camPos - faceCenter;
+        faceFront[i] = glm::dot(fn, toCamera) > 0.0f;
+    }
+
+    // For verts/edges: visible if at least one adjacent face is front-facing
+    // Build vert→face adjacency
+    std::vector<bool> vertVisible(mesh.verts.size(), false);
+    for (int i = 0; i < (int)mesh.faces.size(); i++) {
+        if (!faceFront[i]) continue;
+        int start = mesh.faces[i].edge;
+        int cur = start;
+        do {
+            vertVisible[mesh.hedges[cur].vertex] = true;
+            cur = mesh.hedges[cur].next;
+        } while (cur != start);
+    }
 
     bool shift = (glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
     if (!shift) mesh.deselect_all();
 
     if (g_uiState.selectMode == rf::SelectMode::Vertex) {
         for (int i = 0; i < (int)mesh.verts.size(); i++) {
+            if (!vertVisible[i]) continue;
             glm::vec2 s = world_to_screen(mesh.verts[i].pos, mvp);
-            if (s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY &&
-                is_point_visible(mesh.verts[i].pos, mvp, depthBuf.data(), g_vpW, g_vpH))
+            if (s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY)
                 mesh.verts[i].selected = true;
         }
     } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
@@ -179,16 +195,26 @@ static void finish_box_select()
             int he = mesh.edges[i].he;
             int va = mesh.hedges[mesh.hedges[he].prev].vertex;
             int vb = mesh.hedges[he].vertex;
+            // Edge visible if at least one adjacent face is front-facing
+            // Check via half-edge face and twin's face
+            bool edgeVis = false;
+            int f1 = mesh.hedges[he].face;
+            if (f1 >= 0 && faceFront[f1]) edgeVis = true;
+            int twin = mesh.hedges[he].twin;
+            if (!edgeVis && twin >= 0) {
+                int f2 = mesh.hedges[twin].face;
+                if (f2 >= 0 && faceFront[f2]) edgeVis = true;
+            }
+            if (!edgeVis) continue;
             glm::vec2 sa = world_to_screen(mesh.verts[va].pos, mvp);
             glm::vec2 sb = world_to_screen(mesh.verts[vb].pos, mvp);
             glm::vec2 mid = (sa + sb) * 0.5f;
-            glm::vec3 midPos = (mesh.verts[va].pos + mesh.verts[vb].pos) * 0.5f;
-            if (mid.x >= minX && mid.x <= maxX && mid.y >= minY && mid.y <= maxY &&
-                is_point_visible(midPos, mvp, depthBuf.data(), g_vpW, g_vpH))
+            if (mid.x >= minX && mid.x <= maxX && mid.y >= minY && mid.y <= maxY)
                 mesh.edges[i].selected = true;
         }
     } else if (g_uiState.selectMode == rf::SelectMode::Face) {
         for (int i = 0; i < (int)mesh.faces.size(); i++) {
+            if (!faceFront[i]) continue;
             glm::vec3 center(0);
             int count = 0;
             int start = mesh.faces[i].edge;
@@ -200,8 +226,7 @@ static void finish_box_select()
             } while (cur != start && count < 64);
             center /= (float)count;
             glm::vec2 s = world_to_screen(center, mvp);
-            if (s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY &&
-                is_point_visible(center, mvp, depthBuf.data(), g_vpW, g_vpH))
+            if (s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY)
                 mesh.faces[i].selected = true;
         }
     }
@@ -924,6 +949,40 @@ static void render_viewport()
             glGenBuffers(1, &g_selVBO);
         }
 
+        // Precompute front-facing faces for back-face culling of overlays
+        glm::vec3 camPos = g_camera.get_position() - mesh.position;
+        std::vector<bool> faceFront(mesh.faces.size(), false);
+        for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+            std::vector<int> fv;
+            int start = mesh.faces[fi].edge;
+            int cur = start;
+            do { fv.push_back(mesh.hedges[cur].vertex); cur = mesh.hedges[cur].next; }
+            while (cur != start && (int)fv.size() < 64);
+            if (fv.size() < 3) continue;
+            glm::vec3 fn = glm::cross(mesh.verts[fv[1]].pos - mesh.verts[fv[0]].pos,
+                                       mesh.verts[fv[2]].pos - mesh.verts[fv[0]].pos);
+            glm::vec3 fc(0);
+            for (int j : fv) fc += mesh.verts[j].pos;
+            fc /= (float)fv.size();
+            faceFront[fi] = glm::dot(fn, camPos - fc) > 0.0f;
+        }
+        // Vertex visible if on at least one front-facing face
+        std::vector<bool> vertVis(mesh.verts.size(), false);
+        for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+            if (!faceFront[fi]) continue;
+            int start = mesh.faces[fi].edge; int cur = start;
+            do { vertVis[mesh.hedges[cur].vertex] = true; cur = mesh.hedges[cur].next; } while (cur != start);
+        }
+        // Edge visible if at least one adjacent face is front-facing
+        auto isEdgeVis = [&](int ei) {
+            int he = mesh.edges[ei].he;
+            int f1 = mesh.hedges[he].face;
+            if (f1 >= 0 && faceFront[f1]) return true;
+            int twin = mesh.hedges[he].twin;
+            if (twin >= 0) { int f2 = mesh.hedges[twin].face; if (f2 >= 0 && faceFront[f2]) return true; }
+            return false;
+        };
+
         glBindVertexArray(g_selVAO);
         g_wireShader.use();
         g_wireShader.set_mat4("uMVP", mvp);
@@ -931,10 +990,11 @@ static void render_viewport()
         std::vector<float> buf;
 
         if (g_uiState.selectMode == rf::SelectMode::Vertex) {
-            // Draw all edges in dark color (like edge mode)
+            // Draw front-facing edges in dark color
             buf.clear();
-            for (auto& e : mesh.edges) {
-                int he = e.he;
+            for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                if (!isEdgeVis(ei)) continue;
+                int he = mesh.edges[ei].he;
                 int va = mesh.hedges[mesh.hedges[he].prev].vertex;
                 int vb = mesh.hedges[he].vertex;
                 auto& pa = mesh.verts[va].pos;
@@ -953,11 +1013,11 @@ static void render_viewport()
                 glLineWidth(1.0f);
             }
 
-            // Draw edges connected to selected verts with gradient falloff
-            // Format: pos(3) + color(3) per vertex
+            // Draw front-facing edges connected to selected verts with gradient falloff
             buf.clear();
-            for (auto& e : mesh.edges) {
-                int he = e.he;
+            for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                if (!isEdgeVis(ei)) continue;
+                int he = mesh.edges[ei].he;
                 int va = mesh.hedges[mesh.hedges[he].prev].vertex;
                 int vb = mesh.hedges[he].vertex;
                 bool sa = mesh.verts[va].selected;
@@ -965,7 +1025,6 @@ static void render_viewport()
                 if (!sa && !sb) continue;
                 auto& pa = mesh.verts[va].pos;
                 auto& pb = mesh.verts[vb].pos;
-                // Color: selected end = orange, unselected end = dark
                 glm::vec3 ca = sa ? glm::vec3(kSelectColor) : glm::vec3(kWireColor);
                 glm::vec3 cb = sb ? glm::vec3(kSelectColor) : glm::vec3(kWireColor);
                 buf.push_back(pa.x); buf.push_back(pa.y); buf.push_back(pa.z);
@@ -987,18 +1046,17 @@ static void render_viewport()
                 glDrawArrays(GL_LINES, 0, (int)buf.size() / 6);
                 glDepthFunc(GL_LESS);
                 glLineWidth(1.0f);
-                // Switch back to wireframe shader for subsequent draws
                 g_wireShader.use();
                 g_wireShader.set_mat4("uMVP", mvp);
             }
 
-            // Selected verts as orange dots
+            // Selected visible verts as orange dots
             buf.clear();
-            for (auto& v : mesh.verts) {
-                if (v.selected) {
-                    buf.push_back(v.pos.x);
-                    buf.push_back(v.pos.y);
-                    buf.push_back(v.pos.z);
+            for (int i = 0; i < (int)mesh.verts.size(); i++) {
+                if (mesh.verts[i].selected && vertVis[i]) {
+                    buf.push_back(mesh.verts[i].pos.x);
+                    buf.push_back(mesh.verts[i].pos.y);
+                    buf.push_back(mesh.verts[i].pos.z);
                 }
             }
             if (!buf.empty()) {
@@ -1006,7 +1064,6 @@ static void render_viewport()
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
                 glEnableVertexAttribArray(0);
-
                 g_wireShader.set_vec3("uColor", kSelectColor);
                 glPointSize(6.0f);
                 glDepthFunc(GL_LEQUAL);
@@ -1014,13 +1071,13 @@ static void render_viewport()
                 glDepthFunc(GL_LESS);
             }
 
-            // Unselected verts as small dark dots
+            // Unselected visible verts as small dark dots
             buf.clear();
-            for (auto& v : mesh.verts) {
-                if (!v.selected) {
-                    buf.push_back(v.pos.x);
-                    buf.push_back(v.pos.y);
-                    buf.push_back(v.pos.z);
+            for (int i = 0; i < (int)mesh.verts.size(); i++) {
+                if (!mesh.verts[i].selected && vertVis[i]) {
+                    buf.push_back(mesh.verts[i].pos.x);
+                    buf.push_back(mesh.verts[i].pos.y);
+                    buf.push_back(mesh.verts[i].pos.z);
                 }
             }
             if (!buf.empty()) {
@@ -1028,17 +1085,17 @@ static void render_viewport()
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
                 glEnableVertexAttribArray(0);
-
                 g_wireShader.set_vec3("uColor", {0.1f, 0.1f, 0.1f});
                 glPointSize(5.0f);
                 glDrawArrays(GL_POINTS, 0, (int)buf.size() / 3);
             }
         }
         else if (g_uiState.selectMode == rf::SelectMode::Edge) {
-            // Draw all edges in dark color
+            // Draw front-facing edges in dark color
             buf.clear();
-            for (auto& e : mesh.edges) {
-                int he = e.he;
+            for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                if (!isEdgeVis(ei)) continue;
+                int he = mesh.edges[ei].he;
                 int va = mesh.hedges[mesh.hedges[he].prev].vertex;
                 int vb = mesh.hedges[he].vertex;
                 auto& pa = mesh.verts[va].pos;
@@ -1051,18 +1108,17 @@ static void render_viewport()
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
                 glEnableVertexAttribArray(0);
-
                 g_wireShader.set_vec3("uColor", kWireColor);
-                glLineWidth(2.5f);
+                glLineWidth(1.5f);
                 glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
                 glLineWidth(1.0f);
             }
 
-            // Draw selected edges in orange on top
+            // Draw selected front-facing edges in orange
             buf.clear();
-            for (auto& e : mesh.edges) {
-                if (!e.selected) continue;
-                int he = e.he;
+            for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                if (!mesh.edges[ei].selected || !isEdgeVis(ei)) continue;
+                int he = mesh.edges[ei].he;
                 int va = mesh.hedges[mesh.hedges[he].prev].vertex;
                 int vb = mesh.hedges[he].vertex;
                 auto& pa = mesh.verts[va].pos;
@@ -1075,9 +1131,8 @@ static void render_viewport()
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
                 glEnableVertexAttribArray(0);
-
                 g_wireShader.set_vec3("uColor", kSelectColor);
-                glLineWidth(3.0f);
+                glLineWidth(2.5f);
                 glDepthFunc(GL_LEQUAL);
                 glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
                 glDepthFunc(GL_LESS);
@@ -1085,17 +1140,48 @@ static void render_viewport()
             }
         }
         else if (g_uiState.selectMode == rf::SelectMode::Face) {
-            buf.clear();
-            for (auto& f : mesh.faces) {
-                if (!f.selected) continue;
-                std::vector<int> fv;
-                int start = f.edge;
-                int cur = start;
-                do {
-                    fv.push_back(mesh.hedges[cur].vertex);
-                    cur = mesh.hedges[cur].next;
-                } while (cur != start && (int)fv.size() < 64);
+            // Determine which edges border a selected face
+            std::vector<bool> edgeOnSel(mesh.edges.size(), false);
+            for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                int he = mesh.edges[ei].he;
+                int f1 = mesh.hedges[he].face;
+                if (f1 >= 0 && mesh.faces[f1].selected && faceFront[f1]) { edgeOnSel[ei] = true; continue; }
+                int twin = mesh.hedges[he].twin;
+                if (twin >= 0) { int f2 = mesh.hedges[twin].face; if (f2 >= 0 && mesh.faces[f2].selected && faceFront[f2]) edgeOnSel[ei] = true; }
+            }
 
+            // Draw dark edges on unselected front-facing areas
+            buf.clear();
+            for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                if (!isEdgeVis(ei) || edgeOnSel[ei]) continue;
+                int he = mesh.edges[ei].he;
+                int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                int vb = mesh.hedges[he].vertex;
+                auto& pa = mesh.verts[va].pos;
+                auto& pb = mesh.verts[vb].pos;
+                buf.push_back(pa.x); buf.push_back(pa.y); buf.push_back(pa.z);
+                buf.push_back(pb.x); buf.push_back(pb.y); buf.push_back(pb.z);
+            }
+            if (!buf.empty()) {
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+                g_wireShader.set_vec3("uColor", kWireColor);
+                glLineWidth(1.5f);
+                glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
+                glLineWidth(1.0f);
+            }
+
+            // Translucent fill on selected front-facing faces
+            buf.clear();
+            for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                if (!mesh.faces[fi].selected || !faceFront[fi]) continue;
+                std::vector<int> fv;
+                int start = mesh.faces[fi].edge;
+                int cur = start;
+                do { fv.push_back(mesh.hedges[cur].vertex); cur = mesh.hedges[cur].next; }
+                while (cur != start && (int)fv.size() < 64);
                 for (int i = 1; i + 1 < (int)fv.size(); i++) {
                     int vi[3] = {fv[0], fv[i], fv[i+1]};
                     for (int k = 0; k < 3; k++) {
@@ -1109,18 +1195,42 @@ static void render_viewport()
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
                 glEnableVertexAttribArray(0);
-
                 g_wireShader.set_vec3("uColor", kSelectColor);
                 glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glBlendColor(0, 0, 0, 0.3f);
+                glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
                 glDepthFunc(GL_LEQUAL);
-                // Draw slightly in front
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-2.0f, -2.0f);
                 glDrawArrays(GL_TRIANGLES, 0, (int)buf.size() / 3);
                 glDisable(GL_POLYGON_OFFSET_FILL);
                 glDepthFunc(GL_LESS);
                 glDisable(GL_BLEND);
+            }
+
+            // Orange edges on selected faces (drawn on top)
+            buf.clear();
+            for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                if (!isEdgeVis(ei) || !edgeOnSel[ei]) continue;
+                int he = mesh.edges[ei].he;
+                int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                int vb = mesh.hedges[he].vertex;
+                auto& pa = mesh.verts[va].pos;
+                auto& pb = mesh.verts[vb].pos;
+                buf.push_back(pa.x); buf.push_back(pa.y); buf.push_back(pa.z);
+                buf.push_back(pb.x); buf.push_back(pb.y); buf.push_back(pb.z);
+            }
+            if (!buf.empty()) {
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+                g_wireShader.set_vec3("uColor", kSelectColor);
+                glLineWidth(1.5f);
+                glDepthFunc(GL_LEQUAL);
+                glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
+                glDepthFunc(GL_LESS);
+                glLineWidth(1.0f);
             }
         }
 
