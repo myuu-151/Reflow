@@ -896,6 +896,7 @@ static void render_viewport()
     }
 
     for (auto& mesh : g_meshes) {
+        if (!mesh.visible) continue;
         glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
         glm::mat4 mvp = vp * model;
         g_meshShader.set_mat4("uMVP", mvp);
@@ -911,7 +912,7 @@ static void render_viewport()
     }
 
     // --- Object mode silhouette outline (back-face method) ---
-    if (!g_meshes.empty() && g_objectSelected && g_uiState.selectMode == rf::SelectMode::Object) {
+    if (!g_meshes.empty() && g_objectSelected && g_uiState.selectMode == rf::SelectMode::Object && g_meshes[g_selectedMesh].visible) {
         auto& mesh = g_meshes[g_selectedMesh];
 
         float outlineScale = 1.008f;
@@ -939,7 +940,7 @@ static void render_viewport()
     }
 
     // --- Selection overlay (Model mode edit sub-modes only) ---
-    if (!g_meshes.empty() && g_uiState.editorMode == rf::EditorMode::Model && g_uiState.selectMode != rf::SelectMode::Object) {
+    if (!g_meshes.empty() && g_uiState.editorMode == rf::EditorMode::Model && g_uiState.selectMode != rf::SelectMode::Object && g_meshes[g_selectedMesh].visible) {
         auto& mesh = g_meshes[g_selectedMesh];
         glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
         glm::mat4 mvp = vp * model;

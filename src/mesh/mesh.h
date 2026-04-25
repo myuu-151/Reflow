@@ -46,6 +46,9 @@ struct Mesh {
     std::vector<Face>        faces;
     std::vector<Edge>        edges;
 
+    // Visibility
+    bool visible = true;
+
     // Mirror mode
     bool mirrorX = false;
 

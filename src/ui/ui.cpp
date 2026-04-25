@@ -580,14 +580,17 @@ void ui_objects_panel(UIState& state)
             ImGui::PopStyleColor();
 
             ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
+            ImVec4 eyeCol = meshes[i].visible ? Colors::textDim() : ImVec4(0.3f, 0.3f, 0.35f, 0.3f);
+            ImGui::PushStyleColor(ImGuiCol_Text, eyeCol);
             ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.25f, 0.25f, 0.28f, 1.0f});
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0, 0, 0, 0});
             if (g_iconFont) ImGui::PushFont(g_iconFont);
             char eyeId[16]; snprintf(eyeId, sizeof(eyeId), "##eye%d", i);
-            const char* eyeIcon = "\xEE\xA3\xB4";
-            ImGui::Button(eyeIcon, {s(24), s(24)});
+            const char* eyeIcon = meshes[i].visible ? "\xEE\xA3\xB4" : "\xEE\xA3\xB5"; // U+E8F4 / U+E8F5
+            if (ImGui::Button(eyeIcon, {s(24), s(24)})) {
+                meshes[i].visible = !meshes[i].visible;
+            }
             if (g_iconFont) ImGui::PopFont();
             ImGui::PopStyleColor(4);
         }
