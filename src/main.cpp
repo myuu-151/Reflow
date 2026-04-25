@@ -655,7 +655,11 @@ static void render_viewport()
     }
 
     g_meshShader.use();
-    g_meshShader.set_vec3("uLightDir", kLightDir);
+    // Solid mode: light follows camera; Textured mode: fixed light
+    if (g_uiState.viewMode == rf::ViewMode::Textured)
+        g_meshShader.set_vec3("uLightDir", kLightDir);
+    else
+        g_meshShader.set_vec3("uLightDir", glm::normalize(g_camera.get_position() - g_camera.target));
     g_meshShader.set_float("uAmbient", 0.25f);
 
     for (auto& mesh : g_meshes) {
