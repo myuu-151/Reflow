@@ -3,6 +3,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include <glad/glad.h>
+#include "mesh/mesh.h"
 #include <stb_image.h>
 #include <cstdio>
 #include <string>
@@ -486,9 +487,62 @@ void ui_objects_panel(UIState& state)
     ImGui::SameLine(rightPanelWidth() - s(35));
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
     if (g_iconFont) ImGui::PushFont(g_iconFont);
-    if (ImGui::Button("\xEE\x85\x85##addobj", {s(24), s(24)})) { /* TODO: add primitive */ }
+    if (ImGui::Button("\xEE\x85\x85##addobj", {s(24), s(24)}))
+        ImGui::OpenPopup("##AddPrimitive");
     if (g_iconFont) ImGui::PopFont();
     ImGui::PopStyleColor();
+
+    // Add primitive dropdown
+    static int s_sphereRings = 8;
+    static int s_sphereSegments = 16;
+    static bool s_showSphereParams = false;
+    static int s_sphereIdx = -1;
+    if (ImGui::BeginPopup("##AddPrimitive")) {
+        if (state.meshes && state.selectedMesh && state.objectSelected) {
+            if (ImGui::MenuItem("Cube")) {
+                auto cube = Mesh::create_cube();
+                state.meshes->push_back(std::move(cube));
+                *state.selectedMesh = (int)state.meshes->size() - 1;
+                *state.objectSelected = true;
+            }
+            if (ImGui::MenuItem("Sphere")) {
+                s_sphereRings = 8;
+                s_sphereSegments = 16;
+                auto sphere = Mesh::create_sphere(s_sphereRings, s_sphereSegments);
+                state.meshes->push_back(std::move(sphere));
+                s_sphereIdx = (int)state.meshes->size() - 1;
+                *state.selectedMesh = s_sphereIdx;
+                *state.objectSelected = true;
+                s_showSphereParams = true;
+            }
+        }
+        ImGui::EndPopup();
+    }
+    if (s_showSphereParams)
+        ImGui::OpenPopup("##SphereParams");
+    if (ImGui::BeginPopup("##SphereParams")) {
+        s_showSphereParams = false;
+        ImGui::Text("Sphere");
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(s(50));
+        bool changed = false;
+        changed |= ImGui::InputInt("Rings", &s_sphereRings, 0);
+        if (s_sphereRings < 2) s_sphereRings = 2;
+        if (s_sphereRings > 64) s_sphereRings = 64;
+        ImGui::SetNextItemWidth(s(50));
+        changed |= ImGui::InputInt("Segments", &s_sphereSegments, 0);
+        if (s_sphereSegments < 3) s_sphereSegments = 3;
+        if (s_sphereSegments > 128) s_sphereSegments = 128;
+        // Regenerate sphere live
+        if (changed && state.meshes && s_sphereIdx >= 0 && s_sphereIdx < (int)state.meshes->size()) {
+            auto sphere = Mesh::create_sphere(s_sphereRings, s_sphereSegments);
+            sphere.position = (*state.meshes)[s_sphereIdx].position;
+            (*state.meshes)[s_sphereIdx] = std::move(sphere);
+        }
+        ImGui::EndPopup();
+    } else {
+        s_sphereIdx = -1; // popup closed, stop tracking
+    }
 
     ImGui::Separator();
     ImGui::Spacing();
@@ -665,6 +719,7 @@ void ui_viewport_overlay(UIState& state)
         // Textured mode settings popup
         ImGui::PushStyleColor(ImGuiCol_PopupBg, {0.15f, 0.15f, 0.18f, 0.95f});
         if (ImGui::BeginPopup("##TexSettings")) {
+            ImGui::Checkbox("Follow Camera", &state.lightFollowCam);
             ImGui::Text("Light Direction");
 
             // Circle drag widget
@@ -757,6 +812,19 @@ void ui_viewport_overlay(UIState& state)
                     stops.erase(stops.begin() + selectedStop);
                     if (selectedStop >= (int)stops.size()) selectedStop = (int)stops.size() - 1;
                 }
+                ImGui::SameLine();
+                const char* interpNames[] = {"Ease", "Cardinal", "Linear", "B-Spline", "Constant"};
+                int interpIdx = (int)state.rampInterp;
+                ImGui::SetNextItemWidth(s(45));
+                if (ImGui::BeginCombo("##RampInterp", interpNames[interpIdx], ImGuiComboFlags_NoArrowButton)) {
+                    for (int i = 0; i < 5; i++) {
+                        bool sel = (i == interpIdx);
+                        if (ImGui::Selectable(interpNames[i], sel))
+                            state.rampInterp = (UIState::RampInterp)i;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
                 ImGui::PopStyleVar();
 
                 // Gradient bar
@@ -767,22 +835,44 @@ void ui_viewport_overlay(UIState& state)
                 std::sort(stops.begin(), stops.end(),
                     [](auto& a, auto& b){ return a.first < b.first; });
 
-                // Fill before first stop
-                if (!stops.empty() && stops[0].first > 0.0f) {
-                    int b = (int)(stops[0].second * 255);
-                    rdl->AddRectFilled(rPos, {rPos.x + stops[0].first * rampW, rPos.y + rampH},
+                // Helper: sample ramp at position t using current interpolation
+                auto sampleRampUI = [&](float t) -> float {
+                    if (stops.empty()) return 0.0f;
+                    if (t <= stops[0].first) return stops[0].second;
+                    if (t >= stops.back().first) return stops.back().second;
+                    for (int i = 0; i < (int)stops.size() - 1; i++) {
+                        if (t >= stops[i].first && t <= stops[i + 1].first) {
+                            float f = (t - stops[i].first) / (stops[i + 1].first - stops[i].first);
+                            float v0 = stops[i].second, v1 = stops[i + 1].second;
+                            switch (state.rampInterp) {
+                            case UIState::RampInterp::Constant:
+                                return v0;
+                            case UIState::RampInterp::Ease:
+                                f = f * f * (3.0f - 2.0f * f); // smoothstep
+                                return v0 + f * (v1 - v0);
+                            case UIState::RampInterp::BSpline:
+                            case UIState::RampInterp::Cardinal:
+                                f = f * f * (3.0f - 2.0f * f); // approximate
+                                return v0 + f * (v1 - v0);
+                            default: // Linear
+                                return v0 + f * (v1 - v0);
+                            }
+                        }
+                    }
+                    return stops.back().second;
+                };
+
+                // Draw gradient bar pixel by pixel for accurate preview
+                int pixW = (int)rampW;
+                for (int px = 0; px < pixW; px++) {
+                    float t = (float)px / (float)pixW;
+                    float val = sampleRampUI(t);
+                    int b = (int)(val * 255);
+                    if (b < 0) b = 0; if (b > 255) b = 255;
+                    rdl->AddRectFilled(
+                        {rPos.x + px, rPos.y},
+                        {rPos.x + px + 1, rPos.y + rampH},
                         IM_COL32(b, b, b, 255));
-                }
-                // Gradient between stops
-                for (int si = 0; si < (int)stops.size() - 1; si++) {
-                    float x0 = rPos.x + stops[si].first * rampW;
-                    float x1 = rPos.x + stops[si + 1].first * rampW;
-                    int b0 = (int)(stops[si].second * 255);
-                    int b1 = (int)(stops[si + 1].second * 255);
-                    rdl->AddRectFilledMultiColor(
-                        {x0, rPos.y}, {x1, rPos.y + rampH},
-                        IM_COL32(b0, b0, b0, 255), IM_COL32(b1, b1, b1, 255),
-                        IM_COL32(b1, b1, b1, 255), IM_COL32(b0, b0, b0, 255));
                 }
                 // Fill after last stop
                 if (!stops.empty() && stops.back().first < 1.0f) {

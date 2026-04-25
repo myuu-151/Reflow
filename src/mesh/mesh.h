@@ -95,7 +95,8 @@ struct Mesh {
 };
 
 // Project file I/O
-bool save_project(const std::string& path, const std::vector<Mesh>& meshes);
-bool load_project(const std::string& path, std::vector<Mesh>& meshes);
+struct UIState;
+bool save_project(const std::string& path, const std::vector<Mesh>& meshes, const UIState* ui = nullptr);
+bool load_project(const std::string& path, std::vector<Mesh>& meshes, UIState* ui = nullptr);
 
 } // namespace rf

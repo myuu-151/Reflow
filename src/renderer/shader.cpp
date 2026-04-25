@@ -96,10 +96,12 @@ uniform vec3 uColor;
 uniform vec3 uLightDir;
 uniform float uAmbient;
 
-// Fresnel
+// Fresnel & Toon
 uniform int uFresnel;
+uniform int uToon;
 uniform vec3 uViewPos;
 uniform int uRampCount;
+uniform int uRampInterp; // 0=Ease, 1=Cardinal, 2=Linear, 3=BSpline, 4=Constant
 uniform float uRampPos[16];
 uniform float uRampVal[16];
 
@@ -110,6 +112,9 @@ float sampleRamp(float t) {
     for (int i = 0; i < uRampCount - 1; i++) {
         if (t >= uRampPos[i] && t <= uRampPos[i + 1]) {
             float f = (t - uRampPos[i]) / (uRampPos[i + 1] - uRampPos[i]);
+            if (uRampInterp == 4) return uRampVal[i]; // Constant
+            if (uRampInterp == 0 || uRampInterp == 1 || uRampInterp == 3)
+                f = f * f * (3.0 - 2.0 * f); // smoothstep for Ease/Cardinal/BSpline
             return mix(uRampVal[i], uRampVal[i + 1], f);
         }
     }
@@ -121,6 +126,11 @@ out vec4 FragColor;
 void main() {
     vec3 n = normalize(vNormal);
     float diff = max(dot(n, normalize(uLightDir)), 0.0);
+
+    if (uToon == 1) {
+        diff = sampleRamp(diff);
+    }
+
     vec3 col = uColor * (uAmbient + (1.0 - uAmbient) * diff);
 
     if (uFresnel == 1) {

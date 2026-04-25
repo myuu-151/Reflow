@@ -481,6 +481,123 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             }
             break;
 
+        // Ctrl+= / Ctrl+- : grow / shrink selection
+        case GLFW_KEY_EQUAL: // + key (=/+)
+        case GLFW_KEY_KP_ADD:
+            if ((mods & GLFW_MOD_CONTROL) && !g_meshes.empty() && g_uiState.selectMode != rf::SelectMode::Object) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                    std::set<int> toSelect;
+                    for (int vi = 0; vi < (int)mesh.verts.size(); vi++) {
+                        if (!mesh.verts[vi].selected) continue;
+                        // Find all adjacent verts via half-edges
+                        for (int he = 0; he < (int)mesh.hedges.size(); he++) {
+                            int src = mesh.hedges[mesh.hedges[he].prev].vertex;
+                            int dst = mesh.hedges[he].vertex;
+                            if (src == vi) toSelect.insert(dst);
+                            if (dst == vi) toSelect.insert(src);
+                        }
+                    }
+                    for (int vi : toSelect) mesh.verts[vi].selected = true;
+                } else if (g_uiState.selectMode == rf::SelectMode::Face) {
+                    std::set<int> toSelect;
+                    for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                        if (!mesh.faces[fi].selected) continue;
+                        // Walk edges, find twin faces
+                        int start = mesh.faces[fi].edge;
+                        int cur = start;
+                        do {
+                            int tw = mesh.hedges[cur].twin;
+                            if (tw >= 0 && mesh.hedges[tw].face >= 0)
+                                toSelect.insert(mesh.hedges[tw].face);
+                            cur = mesh.hedges[cur].next;
+                        } while (cur != start);
+                    }
+                    for (int fi : toSelect) mesh.faces[fi].selected = true;
+                } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                    std::set<int> toSelect;
+                    for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                        if (!mesh.edges[ei].selected) continue;
+                        int he = mesh.edges[ei].he;
+                        int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                        int vb = mesh.hedges[he].vertex;
+                        // Find all edges connected to va or vb
+                        for (int ej = 0; ej < (int)mesh.edges.size(); ej++) {
+                            int h2 = mesh.edges[ej].he;
+                            int a2 = mesh.hedges[mesh.hedges[h2].prev].vertex;
+                            int b2 = mesh.hedges[h2].vertex;
+                            if (a2 == va || a2 == vb || b2 == va || b2 == vb)
+                                toSelect.insert(ej);
+                        }
+                    }
+                    for (int ei : toSelect) mesh.edges[ei].selected = true;
+                }
+            }
+            break;
+
+        case GLFW_KEY_MINUS:
+        case GLFW_KEY_KP_SUBTRACT:
+            if ((mods & GLFW_MOD_CONTROL) && !g_meshes.empty() && g_uiState.selectMode != rf::SelectMode::Object) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                    // Deselect verts that have any unselected neighbor
+                    std::set<int> toDeselect;
+                    for (int vi = 0; vi < (int)mesh.verts.size(); vi++) {
+                        if (!mesh.verts[vi].selected) continue;
+                        bool boundary = false;
+                        for (int he = 0; he < (int)mesh.hedges.size() && !boundary; he++) {
+                            int src = mesh.hedges[mesh.hedges[he].prev].vertex;
+                            int dst = mesh.hedges[he].vertex;
+                            if (src == vi && !mesh.verts[dst].selected) boundary = true;
+                            if (dst == vi && !mesh.verts[src].selected) boundary = true;
+                        }
+                        if (boundary) toDeselect.insert(vi);
+                    }
+                    for (int vi : toDeselect) mesh.verts[vi].selected = false;
+                } else if (g_uiState.selectMode == rf::SelectMode::Face) {
+                    std::set<int> toDeselect;
+                    for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                        if (!mesh.faces[fi].selected) continue;
+                        bool boundary = false;
+                        int start = mesh.faces[fi].edge;
+                        int cur = start;
+                        do {
+                            int tw = mesh.hedges[cur].twin;
+                            if (tw < 0 || mesh.hedges[tw].face < 0 || !mesh.faces[mesh.hedges[tw].face].selected)
+                                boundary = true;
+                            cur = mesh.hedges[cur].next;
+                        } while (cur != start && !boundary);
+                        if (boundary) toDeselect.insert(fi);
+                    }
+                    for (int fi : toDeselect) mesh.faces[fi].selected = false;
+                } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                    std::set<int> toDeselect;
+                    for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                        if (!mesh.edges[ei].selected) continue;
+                        int he = mesh.edges[ei].he;
+                        int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                        int vb = mesh.hedges[he].vertex;
+                        bool boundary = false;
+                        for (int ej = 0; ej < (int)mesh.edges.size() && !boundary; ej++) {
+                            if (ej == ei || !mesh.edges[ej].selected) continue;
+                            // skip — only check unselected neighbors
+                        }
+                        // Check if any connected edge is unselected
+                        for (int ej = 0; ej < (int)mesh.edges.size() && !boundary; ej++) {
+                            if (mesh.edges[ej].selected) continue;
+                            int h2 = mesh.edges[ej].he;
+                            int a2 = mesh.hedges[mesh.hedges[h2].prev].vertex;
+                            int b2 = mesh.hedges[h2].vertex;
+                            if (a2 == va || a2 == vb || b2 == va || b2 == vb)
+                                boundary = true;
+                        }
+                        if (boundary) toDeselect.insert(ei);
+                    }
+                    for (int ei : toDeselect) mesh.edges[ei].selected = false;
+                }
+            }
+            break;
+
         // A = select all / deselect all
         case GLFW_KEY_A:
             if (!g_meshes.empty()) {
@@ -670,20 +787,31 @@ static void render_viewport()
     } else if (g_uiState.viewMode == rf::ViewMode::Textured) {
         float rx = glm::radians(g_uiState.lightAngleX);
         float ry = glm::radians(g_uiState.lightAngleY);
-        g_meshShader.set_vec3("uLightDir", glm::normalize(glm::vec3(sinf(rx) * cosf(ry), sinf(ry), cosf(rx) * cosf(ry))));
+        glm::vec3 lightDir = glm::normalize(glm::vec3(sinf(rx) * cosf(ry), sinf(ry), cosf(rx) * cosf(ry)));
+        if (g_uiState.lightFollowCam) {
+            // Rotate the light offset relative to camera orientation
+            glm::vec3 camFwd = glm::normalize(g_camera.get_position() - g_camera.target);
+            glm::vec3 camRight = glm::normalize(glm::cross(glm::vec3(0, 1, 0), camFwd));
+            glm::vec3 camUp = glm::cross(camFwd, camRight);
+            glm::mat3 camBasis(camRight, camUp, camFwd);
+            lightDir = glm::normalize(camBasis * lightDir);
+        }
+        g_meshShader.set_vec3("uLightDir", lightDir);
         g_meshShader.set_float("uAmbient", 0.25f);
     } else {
         g_meshShader.set_vec3("uLightDir", glm::normalize(g_camera.get_position() - g_camera.target));
         g_meshShader.set_float("uAmbient", 0.25f);
     }
 
-    // Fresnel
+    // Toon & Fresnel — both use the ramp
+    g_meshShader.set_int("uToon", g_uiState.toon ? 1 : 0);
     g_meshShader.set_int("uFresnel", g_uiState.fresnel ? 1 : 0);
-    if (g_uiState.fresnel) {
+    if (g_uiState.toon || g_uiState.fresnel) {
         g_meshShader.set_vec3("uViewPos", g_camera.get_position());
         auto& stops = g_uiState.rampStops;
         int count = std::min((int)stops.size(), 16);
         g_meshShader.set_int("uRampCount", count);
+        g_meshShader.set_int("uRampInterp", (int)g_uiState.rampInterp);
         float pos[16] = {}, val[16] = {};
         for (int i = 0; i < count; i++) {
             pos[i] = stops[i].first;
@@ -992,7 +1120,7 @@ static void handle_ui_actions(GLFWwindow* win)
                 g_uiState.pendingAction = rf::UIAction::SaveAs;
                 return;
             }
-            if (rf::save_project(g_uiState.filepath, g_meshes)) {
+            if (rf::save_project(g_uiState.filepath, g_meshes, &g_uiState)) {
                 g_uiState.fileModified = false;
             }
             break;
@@ -1001,7 +1129,7 @@ static void handle_ui_actions(GLFWwindow* win)
 #ifdef _WIN32
             std::string path = file_dialog_save("Reflow Project (*.rflw)\0*.rflw\0All Files\0*.*\0", "rflw");
             if (!path.empty()) {
-                if (rf::save_project(path, g_meshes)) {
+                if (rf::save_project(path, g_meshes, &g_uiState)) {
                     g_uiState.filepath = path;
                     // Extract filename from path
                     size_t sep = path.find_last_of("\\/");
@@ -1017,7 +1145,7 @@ static void handle_ui_actions(GLFWwindow* win)
 #ifdef _WIN32
             std::string path = file_dialog_open("Reflow Project (*.rflw)\0*.rflw\0All Files\0*.*\0");
             if (!path.empty()) {
-                if (rf::load_project(path, g_meshes)) {
+                if (rf::load_project(path, g_meshes, &g_uiState)) {
                     g_selectedMesh = 0;
                     g_uiState.filepath = path;
                     size_t sep = path.find_last_of("\\/");

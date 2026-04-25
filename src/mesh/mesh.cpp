@@ -1,4 +1,5 @@
 #include "mesh/mesh.h"
+#include "ui/ui.h"
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -162,6 +163,30 @@ static void add_quad(Mesh& m, int v0, int v1, int v2, int v3)
     m.faces.push_back(face);
 }
 
+static void add_tri(Mesh& m, int v0, int v1, int v2)
+{
+    int fi = (int)m.faces.size();
+    int base = (int)m.hedges.size();
+    int vi[3] = {v0, v1, v2};
+
+    for (int i = 0; i < 3; i++) {
+        HEdge he;
+        he.vertex = vi[(i + 1) % 3];
+        he.face = fi;
+        he.next = base + (i + 1) % 3;
+        he.prev = base + (i + 2) % 3;
+        he.twin = -1;
+        m.hedges.push_back(he);
+        m.verts[vi[i]].edge = base + i;
+    }
+
+    Face face;
+    face.edge = base;
+    face.selected = false;
+    face.normal = {0, 0, 0};
+    m.faces.push_back(face);
+}
+
 static void link_twins(Mesh& m)
 {
     // For each half-edge, source = vertex of the previous half-edge's destination
@@ -238,6 +263,66 @@ Mesh Mesh::create_plane(float s)
     m.verts.push_back({{-h, 0,  h}, {0,1}, -1, false});
 
     add_quad(m, 0, 1, 2, 3);
+    link_twins(m);
+    m.recalc_normals();
+    m.rebuild_gpu();
+    return m;
+}
+
+// ---------------------------------------------------------------------------
+// Sphere primitive
+// ---------------------------------------------------------------------------
+Mesh Mesh::create_sphere(int rings, int segments, float radius)
+{
+    Mesh m;
+    m.name = "Sphere";
+    m.shadeSmooth = true;
+
+    // Top pole
+    m.verts.push_back({{0, radius, 0}, {0.5f, 1.0f}, -1, false});
+
+    // Ring vertices
+    for (int r = 1; r < rings; r++) {
+        float phi = 3.14159265f * (float)r / (float)rings;
+        float y = radius * cosf(phi);
+        float ringR = radius * sinf(phi);
+        for (int s = 0; s < segments; s++) {
+            float theta = 2.0f * 3.14159265f * (float)s / (float)segments;
+            float x = ringR * sinf(theta);
+            float z = ringR * cosf(theta);
+            float u = (float)s / (float)segments;
+            float v = 1.0f - (float)r / (float)rings;
+            m.verts.push_back({{x, y, z}, {u, v}, -1, false});
+        }
+    }
+
+    // Bottom pole
+    int bottomPole = (int)m.verts.size();
+    m.verts.push_back({{0, -radius, 0}, {0.5f, 0.0f}, -1, false});
+
+    // Top cap triangles (pole to first ring)
+    for (int s = 0; s < segments; s++) {
+        int next = (s + 1) % segments;
+        add_tri(m, 0, 1 + s, 1 + next);
+    }
+
+    // Middle quads
+    for (int r = 0; r < rings - 2; r++) {
+        int ringStart = 1 + r * segments;
+        int nextRingStart = 1 + (r + 1) * segments;
+        for (int s = 0; s < segments; s++) {
+            int next = (s + 1) % segments;
+            add_quad(m, ringStart + s, nextRingStart + s, nextRingStart + next, ringStart + next);
+        }
+    }
+
+    // Bottom cap triangles (last ring to pole)
+    int lastRingStart = 1 + (rings - 2) * segments;
+    for (int s = 0; s < segments; s++) {
+        int next = (s + 1) % segments;
+        add_tri(m, bottomPole, lastRingStart + next, lastRingStart + s);
+    }
+
     link_twins(m);
     m.recalc_normals();
     m.rebuild_gpu();
@@ -729,17 +814,18 @@ void Mesh::delete_selected()
 // ---------------------------------------------------------------------------
 // Project save
 // ---------------------------------------------------------------------------
-bool save_project(const std::string& path, const std::vector<Mesh>& meshes)
+bool save_project(const std::string& path, const std::vector<Mesh>& meshes, const UIState* ui)
 {
     std::ofstream f(path);
     if (!f.is_open()) return false;
 
-    f << "RFLW 1\n";
+    f << "RFLW 2\n";
     f << "meshes " << meshes.size() << "\n";
 
     for (auto& m : meshes) {
         f << "mesh " << m.name << "\n";
         f << "position " << m.position.x << " " << m.position.y << " " << m.position.z << "\n";
+        f << "shadeSmooth " << (m.shadeSmooth ? 1 : 0) << "\n";
 
         f << "vertices " << m.verts.size() << "\n";
         for (auto& v : m.verts)
@@ -765,13 +851,30 @@ bool save_project(const std::string& path, const std::vector<Mesh>& meshes)
         f << "endmesh\n";
     }
 
+    // Material / viewport settings
+    if (ui) {
+        f << "material\n";
+        f << "viewMode " << (int)ui->viewMode << "\n";
+        f << "lightAngleX " << ui->lightAngleX << "\n";
+        f << "lightAngleY " << ui->lightAngleY << "\n";
+        f << "lightFollowCam " << (ui->lightFollowCam ? 1 : 0) << "\n";
+        f << "unlit " << (ui->unlit ? 1 : 0) << "\n";
+        f << "toon " << (ui->toon ? 1 : 0) << "\n";
+        f << "fresnel " << (ui->fresnel ? 1 : 0) << "\n";
+        f << "rampInterp " << (int)ui->rampInterp << "\n";
+        f << "rampStops " << ui->rampStops.size() << "\n";
+        for (auto& s : ui->rampStops)
+            f << "rs " << s.first << " " << s.second << "\n";
+        f << "endmaterial\n";
+    }
+
     return true;
 }
 
 // ---------------------------------------------------------------------------
 // Project load
 // ---------------------------------------------------------------------------
-bool load_project(const std::string& path, std::vector<Mesh>& meshes)
+bool load_project(const std::string& path, std::vector<Mesh>& meshes, UIState* ui)
 {
     std::ifstream f(path);
     if (!f.is_open()) return false;
@@ -780,6 +883,8 @@ bool load_project(const std::string& path, std::vector<Mesh>& meshes)
     // Header
     if (!std::getline(f, line)) return false;
     if (line.substr(0, 4) != "RFLW") return false;
+    int version = 1;
+    { std::string tag; std::istringstream(line) >> tag >> version; }
 
     int meshCount = 0;
     if (!std::getline(f, line)) return false;
@@ -797,6 +902,14 @@ bool load_project(const std::string& path, std::vector<Mesh>& meshes)
         // "position x y z"
         if (!std::getline(f, line)) return false;
         std::istringstream(line) >> line >> m.position.x >> m.position.y >> m.position.z;
+
+        // v2: "shadeSmooth 0/1"
+        if (version >= 2) {
+            if (!std::getline(f, line)) return false;
+            int ss = 0;
+            std::istringstream(line) >> line >> ss;
+            m.shadeSmooth = (ss != 0);
+        }
 
         // "vertices N"
         int vertCount = 0;
@@ -891,6 +1004,37 @@ bool load_project(const std::string& path, std::vector<Mesh>& meshes)
         m.recalc_normals();
         m.rebuild_gpu();
         meshes.push_back(std::move(m));
+    }
+
+    // Material / viewport settings (v2+)
+    if (version >= 2 && ui && std::getline(f, line)) {
+        if (line == "material") {
+            while (std::getline(f, line)) {
+                if (line == "endmaterial") break;
+                std::istringstream iss(line);
+                std::string key;
+                iss >> key;
+                if (key == "viewMode") { int v; iss >> v; ui->viewMode = (ViewMode)v; }
+                else if (key == "lightAngleX") { iss >> ui->lightAngleX; }
+                else if (key == "lightAngleY") { iss >> ui->lightAngleY; }
+                else if (key == "lightFollowCam") { int v; iss >> v; ui->lightFollowCam = (v != 0); }
+                else if (key == "unlit") { int v; iss >> v; ui->unlit = (v != 0); }
+                else if (key == "toon") { int v; iss >> v; ui->toon = (v != 0); }
+                else if (key == "fresnel") { int v; iss >> v; ui->fresnel = (v != 0); }
+                else if (key == "rampInterp") { int v; iss >> v; ui->rampInterp = (UIState::RampInterp)v; }
+                else if (key == "rampStops") {
+                    int count; iss >> count;
+                    ui->rampStops.clear();
+                    for (int i = 0; i < count; i++) {
+                        if (!std::getline(f, line)) break;
+                        std::istringstream rss(line);
+                        std::string tag; float pos, val;
+                        rss >> tag >> pos >> val;
+                        ui->rampStops.push_back({pos, val});
+                    }
+                }
+            }
+        }
     }
 
     return true;

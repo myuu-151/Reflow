@@ -1,7 +1,6 @@
 #pragma once
 
 #include "core/reflow.h"
-#include "mesh/mesh.h"
 #include "imgui.h"
 
 namespace rf {
@@ -53,9 +52,13 @@ struct UIState {
     bool* objectSelected = nullptr;
     float lightAngleX = 0.0f;  // textured mode light horizontal angle
     float lightAngleY = 45.0f; // textured mode light vertical angle
+    bool lightFollowCam = false; // textured mode light follows camera
     bool unlit = false;        // fullbright / unlit mode
     bool toon = false;         // toon shading (placeholder)
     bool fresnel = false;      // fresnel effect (placeholder)
+    // Ramp interpolation
+    enum class RampInterp { Ease, Cardinal, Linear, BSpline, Constant };
+    RampInterp rampInterp = RampInterp::Linear;
     // Ramp stops: {position (0-1), brightness (0-1)}
     std::vector<std::pair<float,float>> rampStops = {{0.0f, 0.0f}, {1.0f, 1.0f}};
 };
