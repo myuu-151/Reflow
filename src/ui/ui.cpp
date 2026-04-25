@@ -54,6 +54,25 @@ static float g_lastAppliedScale = 1.0f; // tracks style scale factor (1.0 = them
 static GLuint g_logoTexture = 0;
 static int g_logoW = 0, g_logoH = 0;
 
+// Selection mode icon textures
+static GLuint g_selTex[4] = {}; // Object, Vertex, Edge, Face
+
+// Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
+static GLuint load_texture(const char* path)
+{
+    int w, h, ch;
+    unsigned char* px = stbi_load(path, &w, &h, &ch, 4);
+    if (!px) return 0;
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    stbi_image_free(px);
+    return tex;
+}
+
 // Resolve path relative to exe directory
 static std::string exe_relative(const char* relPath)
 {
@@ -119,6 +138,18 @@ void ui_init(GLFWwindow* win)
         g_logoW = w;
         g_logoH = h;
         stbi_image_free(pixels);
+    }
+
+    // Load selection mode icons
+    const char* selIconFiles[] = {
+        "res/icon_object.png",
+        "res/icon_vertex.png",
+        "res/icon_edge.png",
+        "res/icon_face.png",
+    };
+    for (int i = 0; i < 4; i++) {
+        std::string path = exe_relative(selIconFiles[i]);
+        g_selTex[i] = load_texture(path.c_str());
     }
 }
 
@@ -585,8 +616,14 @@ void ui_viewport_overlay(UIState& state)
         if (ImGui::Button(selDefs[i].id, {selBtnSz, selBtnSz}))
             state.selectMode = selDefs[i].mode;
 
-        // Draw icon centered on button
-        if (g_iconFont) {
+        if (g_selTex[i]) {
+            // Draw texture centered on button
+            float pad = s(4);
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            drawList->AddImage((ImTextureID)(intptr_t)g_selTex[i],
+                ImVec2(btnPos.x + pad, btnPos.y + pad),
+                ImVec2(btnPos.x + selBtnSz - pad, btnPos.y + selBtnSz - pad));
+        } else if (g_iconFont) {
             float iconSz = s(11);
             ImDrawList* drawList = ImGui::GetWindowDrawList();
             float ix = btnPos.x + (selBtnSz - iconSz) * 0.5f;
