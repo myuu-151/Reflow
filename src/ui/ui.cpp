@@ -259,7 +259,12 @@ void ui_top_bar(UIState& state)
     ImGui::PopStyleColor();
     ImGui::SameLine();
     ImGui::SetCursorPosY(barMid);
-    ImGui::Text("%s", state.filename.c_str());
+    {
+        std::string display = state.filename;
+        auto dot = display.rfind('.');
+        if (dot != std::string::npos) display = display.substr(0, dot);
+        ImGui::Text("%s", display.c_str());
+    }
     ImGui::SameLine();
     if (state.fileModified) {
         ImGui::PushStyleColor(ImGuiCol_Text, Colors::green());
@@ -268,15 +273,22 @@ void ui_top_bar(UIState& state)
     }
 
     // Mode tabs — centered
-    float tabWidth = s(57);
-    float totalTabWidth = tabWidth * 3 + s(12);
+    const char* modeNames[] = {"MODEL", "SCULPT", "PAINT", "RIG", "ANIMATE", "UV"};
+    EditorMode modes[] = {EditorMode::Model, EditorMode::Sculpt, EditorMode::Paint, EditorMode::Rig, EditorMode::Animate, EditorMode::UV};
+    const int tabCount = 6;
+    float padding = ImGui::GetStyle().FramePadding.x * 2;
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float totalTabWidth = 0;
+    float tabWidths[6];
+    for (int i = 0; i < tabCount; i++) {
+        tabWidths[i] = ImGui::CalcTextSize(modeNames[i]).x + padding;
+        totalTabWidth += tabWidths[i];
+    }
+    totalTabWidth += spacing * (tabCount - 1);
     float tabStartX = (vp->Size.x - totalTabWidth) * 0.5f;
     ImGui::SetCursorPos({tabStartX, s(6)});
 
-    const char* modeNames[] = {"MODEL", "PAINT", "UV"};
-    EditorMode modes[] = {EditorMode::Model, EditorMode::Paint, EditorMode::UV};
-
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < tabCount; i++) {
         bool active = (state.editorMode == modes[i]);
 
         if (active) {
@@ -287,7 +299,7 @@ void ui_top_bar(UIState& state)
             ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
         }
 
-        if (ImGui::Button(modeNames[i], {tabWidth, s(21)}))
+        if (ImGui::Button(modeNames[i], {tabWidths[i], s(21)}))
             state.editorMode = modes[i];
 
         // Underline for active tab
@@ -300,7 +312,7 @@ void ui_top_bar(UIState& state)
         }
 
         ImGui::PopStyleColor(2);
-        if (i < 2) ImGui::SameLine();
+        if (i < tabCount - 1) ImGui::SameLine();
     }
 
     // Right side icons using Material Icons font

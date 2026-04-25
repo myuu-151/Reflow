@@ -9,7 +9,7 @@ namespace rf {
 enum class Tool { Select, Move, Rotate, Scale, Box };
 
 // Editor modes (top tabs)
-enum class EditorMode { Model, Paint, UV };
+enum class EditorMode { Model, Sculpt, Paint, Rig, Animate, UV };
 
 // Selection modes
 enum class SelectMode { Object, Vertex, Edge, Face };
