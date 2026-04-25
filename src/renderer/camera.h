@@ -14,7 +14,7 @@ struct Camera {
     // Orbit controls
     float orbitSpeed   = 0.3f;
     float zoomSpeed    = 0.5f;
-    float panSpeed     = 0.01f;
+    float panSpeed     = 0.004f;
 
     glm::vec3 get_position() const;
     glm::mat4 get_view() const;
