@@ -32,6 +32,7 @@ static rf::Grid   g_grid;
 
 static std::vector<rf::Mesh> g_meshes;
 static int g_selectedMesh = 0;
+static bool g_objectSelected = false;
 
 static rf::UIState g_uiState;
 
@@ -136,9 +137,14 @@ static void start_transform(int mode)
     g_grab_vertIdx.clear();
     g_grab_origPos.clear();
 
-    // Collect selected verts (or verts of selected edges/faces)
+    // Collect selected verts (or verts of selected edges/faces/object)
     std::set<int> selVerts;
-    if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+    if (g_uiState.selectMode == rf::SelectMode::Object) {
+        if (g_objectSelected) {
+            for (int i = 0; i < (int)mesh.verts.size(); i++)
+                selVerts.insert(i);
+        }
+    } else if (g_uiState.selectMode == rf::SelectMode::Vertex) {
         for (int i = 0; i < (int)mesh.verts.size(); i++)
             if (mesh.verts[i].selected) selVerts.insert(i);
     } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
@@ -162,12 +168,14 @@ static void start_transform(int mode)
 
     if (selVerts.empty()) return;
 
+    glm::vec3 sum(0);
     for (int vi : selVerts) {
         g_grab_vertIdx.push_back(vi);
         g_grab_origPos.push_back(mesh.verts[vi].pos);
+        sum += mesh.verts[vi].pos;
     }
 
-    g_grab_center = mesh.get_selection_center();
+    g_grab_center = sum / (float)selVerts.size() + mesh.position;
     g_transformMode = mode;
     g_grab_axis = -1;
 
@@ -240,10 +248,19 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
         }
     }
 
-    // LMB: confirm transform
+    // LMB: confirm transform or select/deselect object
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         if (g_transformMode != 0) {
             confirm_transform();
+        } else if (g_uiState.selectMode == rf::SelectMode::Object) {
+            double mx, my;
+            glfwGetCursorPos(win, &mx, &my);
+            if (mouse_in_viewport(mx, my) && !g_meshes.empty()) {
+                glm::vec3 rayO, rayD;
+                screen_to_ray(mx, my, rayO, rayD);
+                int hit = g_meshes[g_selectedMesh].pick_face(rayO, rayD);
+                g_objectSelected = (hit >= 0);
+            }
         }
     }
 }
@@ -315,20 +332,17 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int)
 
         // Grab (G)
         case GLFW_KEY_G:
-            if (g_uiState.selectMode != rf::SelectMode::Object)
-                start_transform(1);
+            start_transform(1);
             break;
 
         // Scale (S)
         case GLFW_KEY_S:
-            if (g_uiState.selectMode != rf::SelectMode::Object)
-                start_transform(2);
+            start_transform(2);
             break;
 
         // Rotate (R)
         case GLFW_KEY_R:
-            if (g_uiState.selectMode != rf::SelectMode::Object)
-                start_transform(3);
+            start_transform(3);
             break;
 
         // Extrude (E) — face mode only
@@ -551,6 +565,26 @@ static void render_viewport()
         glDrawArrays(GL_LINES, 0, mesh.wireLineCount * 2);
     }
 
+    // --- Object mode silhouette outline (back-face method) ---
+    if (!g_meshes.empty() && g_objectSelected && g_uiState.selectMode == rf::SelectMode::Object) {
+        auto& mesh = g_meshes[g_selectedMesh];
+
+        float outlineScale = 1.008f;
+        glm::mat4 scaledModel = glm::translate(glm::mat4(1.0f), mesh.position)
+            * glm::scale(glm::mat4(1.0f), glm::vec3(outlineScale));
+
+        g_wireShader.use();
+        g_wireShader.set_mat4("uMVP", vp * scaledModel);
+        g_wireShader.set_vec3("uColor", {1.0f, 1.0f, 1.0f});
+
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_FRONT);  // only draw back faces of the larger mesh
+        glBindVertexArray(mesh.vao);
+        glDrawArrays(GL_TRIANGLES, 0, mesh.triCount * 3);
+        glCullFace(GL_BACK);
+        glDisable(GL_CULL_FACE);
+    }
+
     // --- Selection overlay ---
     if (!g_meshes.empty() && g_uiState.selectMode != rf::SelectMode::Object) {
         auto& mesh = g_meshes[g_selectedMesh];
@@ -678,31 +712,41 @@ static void render_viewport()
             }
         }
 
-        // Draw axis indicator during transform
-        if (g_transformMode != 0 && g_grab_axis >= 0) {
-            float len = 2.0f;
-            glm::vec3 center = g_grab_center - mesh.position;
-            glm::vec3 dir(0);
-            dir[g_grab_axis] = len;
-            buf.clear();
-            glm::vec3 a = center - dir;
-            glm::vec3 b = center + dir;
-            buf.push_back(a.x); buf.push_back(a.y); buf.push_back(a.z);
-            buf.push_back(b.x); buf.push_back(b.y); buf.push_back(b.z);
+        glBindVertexArray(0);
+    }
 
-            glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
-            glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-            glEnableVertexAttribArray(0);
+    // Draw axis indicator during transform (all modes)
+    if (!g_meshes.empty() && g_transformMode != 0 && g_grab_axis >= 0) {
+        auto& mesh = g_meshes[g_selectedMesh];
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
 
-            g_wireShader.set_vec3("uColor", kAxisColors[g_grab_axis]);
-            glLineWidth(2.0f);
-            glDisable(GL_DEPTH_TEST);
-            glDrawArrays(GL_LINES, 0, 2);
-            glEnable(GL_DEPTH_TEST);
-            glLineWidth(1.0f);
+        if (!g_selVAO) {
+            glGenVertexArrays(1, &g_selVAO);
+            glGenBuffers(1, &g_selVBO);
         }
 
+        float len = 2.0f;
+        glm::vec3 center = g_grab_center;
+        glm::vec3 dir(0);
+        dir[g_grab_axis] = len;
+        glm::vec3 a = center - dir;
+        glm::vec3 b = center + dir;
+        std::vector<float> axisBuf = {a.x, a.y, a.z, b.x, b.y, b.z};
+
+        glBindVertexArray(g_selVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+        glBufferData(GL_ARRAY_BUFFER, axisBuf.size() * sizeof(float), axisBuf.data(), GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+
+        g_wireShader.use();
+        g_wireShader.set_mat4("uMVP", vp * glm::mat4(1.0f));
+        g_wireShader.set_vec3("uColor", kAxisColors[g_grab_axis]);
+        glLineWidth(2.0f);
+        glDisable(GL_DEPTH_TEST);
+        glDrawArrays(GL_LINES, 0, 2);
+        glEnable(GL_DEPTH_TEST);
+        glLineWidth(1.0f);
         glBindVertexArray(0);
     }
 
@@ -838,6 +882,7 @@ int main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
+    glfwWindowHint(GLFW_STENCIL_BITS, 8);
 
     GLFWwindow* win = glfwCreateWindow(g_winW, g_winH, rf::kAppName, nullptr, nullptr);
     if (!win) {
