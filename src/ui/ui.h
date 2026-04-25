@@ -39,6 +39,7 @@ struct UIState {
     std::string filepath;  // full path to current project file
     float uiScale = 2.5f;
     UIAction pendingAction = UIAction::None;
+    bool pendingFrameSelected = false;
 };
 
 void ui_init(GLFWwindow* win);
@@ -55,6 +56,8 @@ void ui_status_bar(UIState& state);
 void ui_viewport_overlay(UIState& state);
 
 void ui_apply_theme();
+void ui_save_settings(const UIState& state);
+void ui_load_settings(UIState& state);
 
 // Scaled layout dimensions
 float ui_top_bar_height();

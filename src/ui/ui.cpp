@@ -356,6 +356,10 @@ void ui_top_bar(UIState& state)
         if (ImGui::SliderFloat("##uiscale", &state.uiScale, 0.8f, 2.5f, "%.1fx")) {
             ImGui::GetIO().FontGlobalScale = state.uiScale;
         }
+        ImGui::Spacing();
+        if (ImGui::Button("Save Settings", {s(107), s(22)})) {
+            ui_save_settings(state);
+        }
         ImGui::EndPopup();
     }
     ImGui::PopStyleColor();
@@ -464,7 +468,8 @@ void ui_objects_panel(UIState& state)
 
     // Object list (placeholder — will be driven by actual scene)
     ImGui::PushStyleColor(ImGuiCol_Button, {0.18f, 0.18f, 0.22f, 1.0f});
-    ImGui::Button("Cube", {rightPanelWidth() - s(43), s(23)});
+    if (ImGui::Button("Cube", {rightPanelWidth() - s(43), s(23)}))
+        state.pendingFrameSelected = true;
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
@@ -673,5 +678,40 @@ float ui_top_bar_height()    { return topBarHeight(); }
 float ui_toolbar_width()     { return toolbarWidth(); }
 float ui_right_panel_width() { return rightPanelWidth(); }
 float ui_status_bar_height() { return statusBarHeight(); }
+
+// ---------------------------------------------------------------------------
+// Settings persistence (reflow.ini next to executable)
+// ---------------------------------------------------------------------------
+static std::string settings_path()
+{
+    char buf[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    std::string p(buf);
+    auto pos = p.find_last_of("\\/");
+    if (pos != std::string::npos) p = p.substr(0, pos + 1);
+    return p + "reflow.ini";
+}
+
+void ui_save_settings(const UIState& state)
+{
+    FILE* f = fopen(settings_path().c_str(), "w");
+    if (!f) return;
+    fprintf(f, "ui_scale=%.2f\n", state.uiScale);
+    fclose(f);
+}
+
+void ui_load_settings(UIState& state)
+{
+    FILE* f = fopen(settings_path().c_str(), "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        float v;
+        if (sscanf(line, "ui_scale=%f", &v) == 1) {
+            state.uiScale = v;
+        }
+    }
+    fclose(f);
+}
 
 } // namespace rf

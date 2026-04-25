@@ -945,6 +945,8 @@ int main()
 
     // Init UI
     rf::ui_init(win);
+    rf::ui_load_settings(g_uiState);
+    ImGui::GetIO().FontGlobalScale = g_uiState.uiScale;
 
     // Default scene
     g_meshes.push_back(rf::Mesh::create_cube());
@@ -956,6 +958,18 @@ int main()
         // Update transform mode (grab/scale/rotate)
         update_transform(win);
         handle_ui_actions(win);
+
+        // Frame selected: recenter camera on mesh
+        if (g_uiState.pendingFrameSelected) {
+            g_uiState.pendingFrameSelected = false;
+            if (!g_meshes.empty()) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                glm::vec3 center(0);
+                for (auto& v : mesh.verts) center += v.pos;
+                center /= (float)mesh.verts.size();
+                g_camera.target = center + mesh.position;
+            }
+        }
 
         // Clear full window
         glViewport(0, 0, g_winW, g_winH);
