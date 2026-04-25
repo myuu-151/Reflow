@@ -62,6 +62,10 @@ static GLuint g_selTex[4] = {}; // Object, Vertex, Edge, Face
 // Viewport shading icon textures
 static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
 
+// Properties panel tab
+static int g_propTab = 0; // 0=Object, 1=Material
+static GLuint g_propTabTex[2] = {}; // Object, Material icons
+
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
 static GLuint load_texture(const char* path)
 {
@@ -167,6 +171,16 @@ void ui_init(GLFWwindow* win)
     for (int i = 0; i < 3; i++) {
         std::string path = exe_relative(viewModeFiles[i]);
         g_viewModeTex[i] = load_texture(path.c_str());
+    }
+
+    // Load properties tab icons
+    const char* propTabFiles[] = {
+        "res/icon_object.png",
+        "res/icon_material.png",
+    };
+    for (int i = 0; i < 2; i++) {
+        std::string path = exe_relative(propTabFiles[i]);
+        g_propTabTex[i] = load_texture(path.c_str());
     }
 }
 
@@ -598,29 +612,101 @@ void ui_properties_panel(UIState& state)
 
     ImGui::Text("PROPERTIES");
     ImGui::Separator();
+
+    // Tab icons
+    {
+        float iconSz = s(18);
+        float pad = s(3);
+        const char* tabLabels[] = {"##PropObj", "##PropMat"};
+        for (int i = 0; i < 2; i++) {
+            if (i > 0) ImGui::SameLine(0, s(2));
+
+            bool active = (g_propTab == i);
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Button, Colors::accent());
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Colors::accentHi());
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, Colors::panelDark());
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.20f, 0.20f, 0.24f, 1.0f});
+            }
+
+            ImVec2 btnPos = ImGui::GetCursorScreenPos();
+            if (ImGui::Button(tabLabels[i], {iconSz, iconSz}))
+                g_propTab = i;
+
+            if (g_propTabTex[i]) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddImage((ImTextureID)(intptr_t)g_propTabTex[i],
+                    {btnPos.x + pad, btnPos.y + pad},
+                    {btnPos.x + iconSz - pad, btnPos.y + iconSz - pad});
+            }
+
+            ImGui::PopStyleColor(2);
+        }
+    }
+
     ImGui::Spacing();
 
-    // Position
-    static float pos[3] = {0, 0, 0};
-    ImGui::Text("Position");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat3("##pos", pos, "%.1f");
+    if (g_propTab == 0) {
+        // ---- Object tab ----
+        bool hasMesh = state.meshes && !state.meshes->empty() && state.selectedMesh &&
+                       *state.selectedMesh >= 0 && *state.selectedMesh < (int)state.meshes->size();
 
-    ImGui::Spacing();
+        if (hasMesh) {
+            auto& mesh = (*state.meshes)[*state.selectedMesh];
 
-    // Rotation
-    static float rot[3] = {0, 0, 0};
-    ImGui::Text("Rotation");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat3("##rot", rot, "%.0f\xC2\xB0"); // degree sign
+            ImGui::Text("Position");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputFloat3("##pos", &mesh.position.x, "%.2f"))
+                mesh.rebuild_gpu();
 
-    ImGui::Spacing();
+            ImGui::Spacing();
 
-    // Scale
-    static float scl[3] = {1, 1, 1};
-    ImGui::Text("Scale");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat3("##scl", scl, "%.1f");
+            ImGui::Text("Rotation");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputFloat3("##rot", &mesh.rotation.x, "%.1f\xC2\xB0");
+
+            ImGui::Spacing();
+
+            ImGui::Text("Scale");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputFloat3("##scl", &mesh.scale.x, "%.2f");
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
+            ImGui::Text("No object selected");
+            ImGui::PopStyleColor();
+        }
+    } else {
+        // ---- Material tab ----
+        ImGui::Text("Shading");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (ImGui::Checkbox("Unlit", &state.unlit) && state.unlit)
+            { state.toon = false; state.fresnel = false; }
+        if (ImGui::Checkbox("Toon", &state.toon) && state.toon)
+            { state.unlit = false; state.fresnel = false; }
+        if (ImGui::Checkbox("Fresnel", &state.fresnel) && state.fresnel)
+            { state.unlit = false; state.toon = false; }
+        ImGui::Checkbox("Specular", &state.specular);
+        if (state.specular) {
+            ImGui::PushItemWidth(-1);
+            ImGui::SliderFloat("##Roughness", &state.specRoughness, 0.0f, 1.0f, "Roughness: %.2f");
+            ImGui::PopItemWidth();
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Lighting");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Checkbox("Follow Camera", &state.lightFollowCam);
+
+        ImGui::PushItemWidth(-1);
+        ImGui::SliderFloat("##LightX", &state.lightAngleX, -180.0f, 180.0f, "Horiz: %.0f\xC2\xB0");
+        ImGui::SliderFloat("##LightY", &state.lightAngleY, 0.0f, 90.0f, "Vert: %.0f\xC2\xB0");
+        ImGui::PopItemWidth();
+    }
 
     ImGui::End();
 }
