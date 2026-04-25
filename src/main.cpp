@@ -655,12 +655,19 @@ static void render_viewport()
     }
 
     g_meshShader.use();
-    // Solid mode: light follows camera; Textured mode: fixed light
-    if (g_uiState.viewMode == rf::ViewMode::Textured)
-        g_meshShader.set_vec3("uLightDir", kLightDir);
-    else
+    // Lighting: unlit = fullbright, textured = user-controlled angle, solid = camera-following
+    if (g_uiState.unlit) {
+        g_meshShader.set_vec3("uLightDir", glm::vec3(0, 1, 0));
+        g_meshShader.set_float("uAmbient", 1.0f);
+    } else if (g_uiState.viewMode == rf::ViewMode::Textured) {
+        float rx = glm::radians(g_uiState.lightAngleX);
+        float ry = glm::radians(g_uiState.lightAngleY);
+        g_meshShader.set_vec3("uLightDir", glm::normalize(glm::vec3(sinf(rx) * cosf(ry), sinf(ry), cosf(rx) * cosf(ry))));
+        g_meshShader.set_float("uAmbient", 0.25f);
+    } else {
         g_meshShader.set_vec3("uLightDir", glm::normalize(g_camera.get_position() - g_camera.target));
-    g_meshShader.set_float("uAmbient", 0.25f);
+        g_meshShader.set_float("uAmbient", 0.25f);
+    }
 
     for (auto& mesh : g_meshes) {
         glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);

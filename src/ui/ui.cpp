@@ -639,10 +639,26 @@ void ui_viewport_overlay(UIState& state)
                 char id[16]; snprintf(id, sizeof(id), "vm%d", i);
                 if (ImGui::ImageButton(id, (ImTextureID)(intptr_t)g_viewModeTex[i], {btnSz, btnSz}, {0,0}, {1,1}, {0,0,0,0}, tint))
                     state.viewMode = modes[i];
+                // RMB on textured button opens settings popup
+                if (i == 2 && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+                    ImGui::OpenPopup("##TexSettings");
             }
             ImGui::PopStyleColor(2);
             if (i < 2) ImGui::SameLine(0, gap);
         }
+
+        // Textured mode settings popup
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, {0.15f, 0.15f, 0.18f, 0.95f});
+        if (ImGui::BeginPopup("##TexSettings")) {
+            ImGui::Text("Light Direction");
+            ImGui::SetNextItemWidth(s(80));
+            ImGui::SliderFloat("X", &state.lightAngleX, 0.0f, 360.0f, "%.0f");
+            ImGui::SetNextItemWidth(s(80));
+            ImGui::SliderFloat("Y", &state.lightAngleY, 0.0f, 360.0f, "%.0f");
+            ImGui::Checkbox("Unlit", &state.unlit);
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor();
         ImGui::End();
         ImGui::PopStyleColor();
     }

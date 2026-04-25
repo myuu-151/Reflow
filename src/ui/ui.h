@@ -44,6 +44,9 @@ struct UIState {
     float uiScale = 2.5f;
     UIAction pendingAction = UIAction::None;
     bool pendingFrameSelected = false;
+    float lightAngleX = 0.0f;  // textured mode light horizontal angle
+    float lightAngleY = 45.0f; // textured mode light vertical angle
+    bool unlit = false;        // fullbright / unlit mode
 };
 
 void ui_init(GLFWwindow* win);
