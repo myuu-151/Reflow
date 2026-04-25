@@ -20,5 +20,6 @@ struct Shader {
 Shader create_mesh_shader();
 Shader create_grid_shader();
 Shader create_wireframe_shader();
+Shader create_vertcolor_shader();
 
 } // namespace rf

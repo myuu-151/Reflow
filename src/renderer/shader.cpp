@@ -247,4 +247,35 @@ void main() {
     return s;
 }
 
+// ---------------------------------------------------------------------------
+// Per-vertex color shader (for gradient edges)
+// ---------------------------------------------------------------------------
+Shader create_vertcolor_shader()
+{
+    const char* vert = R"(
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+uniform mat4 uMVP;
+out vec3 vColor;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vColor = aColor;
+}
+)";
+
+    const char* frag = R"(
+#version 330 core
+in vec3 vColor;
+out vec4 FragColor;
+void main() {
+    FragColor = vec4(vColor, 1.0);
+}
+)";
+
+    Shader s;
+    s.compile(vert, frag);
+    return s;
+}
+
 } // namespace rf
