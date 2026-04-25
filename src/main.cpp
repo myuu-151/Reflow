@@ -60,6 +60,10 @@ static glm::mat4 g_viewMat, g_projMat;
 // Selection overlay GPU objects
 static GLuint g_selVAO = 0, g_selVBO = 0;
 
+// Box select
+static bool g_boxSelecting = false;
+static double g_boxStartX, g_boxStartY, g_boxEndX, g_boxEndY;
+
 // Transform mode: 0=none, 1=grab, 2=scale, 3=rotate
 static int g_transformMode = 0;
 static int g_grab_axis = -1;           // -1=free, 0=X, 1=Y, 2=Z
@@ -108,6 +112,69 @@ static bool mouse_in_viewport(double mx, double my)
     float relX = (float)(mx - g_vpX);
     float relY = (float)(my - topBar);
     return relX >= 0 && relX < g_vpW && relY >= 0 && relY < g_vpH;
+}
+
+static glm::vec2 world_to_screen(const glm::vec3& pos, const glm::mat4& mvp)
+{
+    glm::vec4 clip = mvp * glm::vec4(pos, 1.0f);
+    if (clip.w <= 0) return {-1, -1};
+    float ndcX = clip.x / clip.w;
+    float ndcY = clip.y / clip.w;
+    float topBar = rf::ui_top_bar_height();
+    float sx = (ndcX * 0.5f + 0.5f) * g_vpW + g_vpX;
+    float sy = (1.0f - (ndcY * 0.5f + 0.5f)) * g_vpH + topBar;
+    return {sx, sy};
+}
+
+static void finish_box_select()
+{
+    if (g_meshes.empty() || g_uiState.editorMode != rf::EditorMode::Model) return;
+    auto& mesh = g_meshes[g_selectedMesh];
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+    glm::mat4 mvp = g_projMat * g_viewMat * model;
+
+    float minX = (float)std::min(g_boxStartX, g_boxEndX);
+    float maxX = (float)std::max(g_boxStartX, g_boxEndX);
+    float minY = (float)std::min(g_boxStartY, g_boxEndY);
+    float maxY = (float)std::max(g_boxStartY, g_boxEndY);
+
+    bool shift = (glfwGetKey(glfwGetCurrentContext(), GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
+    if (!shift) mesh.deselect_all();
+
+    if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+        for (int i = 0; i < (int)mesh.verts.size(); i++) {
+            glm::vec2 s = world_to_screen(mesh.verts[i].pos, mvp);
+            if (s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY)
+                mesh.verts[i].selected = true;
+        }
+    } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+        for (int i = 0; i < (int)mesh.edges.size(); i++) {
+            int he = mesh.edges[i].he;
+            int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+            int vb = mesh.hedges[he].vertex;
+            glm::vec2 sa = world_to_screen(mesh.verts[va].pos, mvp);
+            glm::vec2 sb = world_to_screen(mesh.verts[vb].pos, mvp);
+            glm::vec2 mid = (sa + sb) * 0.5f;
+            if (mid.x >= minX && mid.x <= maxX && mid.y >= minY && mid.y <= maxY)
+                mesh.edges[i].selected = true;
+        }
+    } else if (g_uiState.selectMode == rf::SelectMode::Face) {
+        for (int i = 0; i < (int)mesh.faces.size(); i++) {
+            glm::vec3 center(0);
+            int count = 0;
+            int start = mesh.faces[i].edge;
+            int cur = start;
+            do {
+                center += mesh.verts[mesh.hedges[cur].vertex].pos;
+                count++;
+                cur = mesh.hedges[cur].next;
+            } while (cur != start && count < 64);
+            center /= (float)count;
+            glm::vec2 s = world_to_screen(center, mvp);
+            if (s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY)
+                mesh.faces[i].selected = true;
+        }
+    }
 }
 
 static void cancel_transform()
@@ -253,10 +320,34 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
         }
     }
 
-    // LMB: confirm transform
+    // LMB: confirm transform or start box select
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         if (g_transformMode != 0) {
             confirm_transform();
+        } else {
+            double mx, my;
+            glfwGetCursorPos(win, &mx, &my);
+            if (mouse_in_viewport(mx, my) && g_uiState.editorMode == rf::EditorMode::Model
+                && g_uiState.selectMode != rf::SelectMode::Object) {
+                g_boxSelecting = true;
+                g_boxStartX = mx; g_boxStartY = my;
+                g_boxEndX = mx; g_boxEndY = my;
+            }
+        }
+    }
+
+    // LMB release: finish box select
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
+        if (g_boxSelecting) {
+            g_boxSelecting = false;
+            double mx, my;
+            glfwGetCursorPos(win, &mx, &my);
+            g_boxEndX = mx; g_boxEndY = my;
+            // Only do box select if dragged more than a few pixels
+            if (std::abs(g_boxEndX - g_boxStartX) > 3 || std::abs(g_boxEndY - g_boxStartY) > 3)
+                finish_box_select();
+            else if (!g_meshes.empty())
+                g_meshes[g_selectedMesh].deselect_all();
         }
     }
 }
@@ -269,6 +360,11 @@ static void cb_cursor(GLFWwindow* win, double x, double y)
     float dy = (float)(y - g_lastY);
     g_lastX = x;
     g_lastY = y;
+
+    if (g_boxSelecting) {
+        g_boxEndX = x;
+        g_boxEndY = y;
+    }
 
     bool shift = (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
     bool alt   = (glfwGetKey(win, GLFW_KEY_LEFT_ALT) == GLFW_PRESS);
@@ -547,6 +643,14 @@ static void render_viewport()
 
     // Meshes — solid pass
     glEnable(GL_DEPTH_TEST);
+
+    // Push mesh slightly back so edge lines render on top
+    bool needOffset = (g_uiState.editorMode == rf::EditorMode::Model && g_uiState.selectMode == rf::SelectMode::Edge);
+    if (needOffset) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(1.0f, 1.0f);
+    }
+
     g_meshShader.use();
     g_meshShader.set_vec3("uLightDir", kLightDir);
     g_meshShader.set_float("uAmbient", 0.25f);
@@ -562,18 +666,8 @@ static void render_viewport()
         glDrawArrays(GL_TRIANGLES, 0, mesh.triCount * 3);
     }
 
-    // Wireframe overlay (only in edit modes, not object mode)
-    if (g_uiState.selectMode != rf::SelectMode::Object) {
-        g_wireShader.use();
-        for (auto& mesh : g_meshes) {
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
-            glm::mat4 mvp = vp * model;
-            g_wireShader.set_mat4("uMVP", mvp);
-            g_wireShader.set_vec3("uColor", kWireColor);
-
-            glBindVertexArray(mesh.wireVao);
-            glDrawArrays(GL_LINES, 0, mesh.wireLineCount * 2);
-        }
+    if (needOffset) {
+        glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
     // --- Object mode silhouette outline (back-face method) ---
@@ -604,8 +698,8 @@ static void render_viewport()
         glDisable(GL_CULL_FACE);
     }
 
-    // --- Selection overlay ---
-    if (!g_meshes.empty() && g_uiState.selectMode != rf::SelectMode::Object) {
+    // --- Selection overlay (Model mode edit sub-modes only) ---
+    if (!g_meshes.empty() && g_uiState.editorMode == rf::EditorMode::Model && g_uiState.selectMode != rf::SelectMode::Object) {
         auto& mesh = g_meshes[g_selectedMesh];
         glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
         glm::mat4 mvp = vp * model;
@@ -639,7 +733,7 @@ static void render_viewport()
                 glEnableVertexAttribArray(0);
 
                 g_wireShader.set_vec3("uColor", kSelectColor);
-                glPointSize(8.0f);
+                glPointSize(6.0f);
                 glDisable(GL_DEPTH_TEST);
                 glDrawArrays(GL_POINTS, 0, (int)buf.size() / 3);
                 glEnable(GL_DEPTH_TEST);
@@ -661,11 +755,35 @@ static void render_viewport()
                 glEnableVertexAttribArray(0);
 
                 g_wireShader.set_vec3("uColor", {0.9f, 0.9f, 0.9f});
-                glPointSize(4.0f);
+                glPointSize(6.0f);
                 glDrawArrays(GL_POINTS, 0, (int)buf.size() / 3);
             }
         }
         else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+            // Draw all edges in dark color
+            buf.clear();
+            for (auto& e : mesh.edges) {
+                int he = e.he;
+                int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                int vb = mesh.hedges[he].vertex;
+                auto& pa = mesh.verts[va].pos;
+                auto& pb = mesh.verts[vb].pos;
+                buf.push_back(pa.x); buf.push_back(pa.y); buf.push_back(pa.z);
+                buf.push_back(pb.x); buf.push_back(pb.y); buf.push_back(pb.z);
+            }
+            if (!buf.empty()) {
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+
+                g_wireShader.set_vec3("uColor", kWireColor);
+                glLineWidth(2.5f);
+                glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
+                glLineWidth(1.0f);
+            }
+
+            // Draw selected edges in orange on top
             buf.clear();
             for (auto& e : mesh.edges) {
                 if (!e.selected) continue;
@@ -974,6 +1092,10 @@ int main()
         update_transform(win);
         handle_ui_actions(win);
 
+        // Force Object mode when not in Model tab
+        if (g_uiState.editorMode != rf::EditorMode::Model)
+            g_uiState.selectMode = rf::SelectMode::Object;
+
         // Frame selected: recenter camera on mesh
         if (g_uiState.pendingFrameSelected) {
             g_uiState.pendingFrameSelected = false;
@@ -1002,6 +1124,16 @@ int main()
         rf::ui_properties_panel(g_uiState);
         rf::ui_status_bar(g_uiState);
         rf::ui_viewport_overlay(g_uiState);
+
+        // Draw box select rectangle
+        if (g_boxSelecting) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            ImVec2 a((float)g_boxStartX, (float)g_boxStartY);
+            ImVec2 b((float)g_boxEndX, (float)g_boxEndY);
+            dl->AddRectFilled(a, b, IM_COL32(100, 150, 255, 40));
+            dl->AddRect(a, b, IM_COL32(100, 150, 255, 180), 0, 0, 1.5f);
+        }
+
         rf::ui_render();
 
         glfwSwapBuffers(win);

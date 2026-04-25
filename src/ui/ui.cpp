@@ -613,7 +613,7 @@ void ui_viewport_overlay(UIState& state)
     // Viewport shading mode buttons — top right of viewport
     {
         float vpW = vp->Size.x - toolbarWidth() - rightPanelWidth();
-        float btnSz = s(20);
+        float btnSz = s(18.5f);
         float gap = s(3);
         float pad = ImGui::GetStyle().FramePadding.x;
         float totalW = (btnSz + pad * 2) * 3 + gap * 2;
@@ -643,7 +643,6 @@ void ui_viewport_overlay(UIState& state)
             ImGui::PopStyleColor(2);
             if (i < 2) ImGui::SameLine(0, gap);
         }
-
         ImGui::End();
         ImGui::PopStyleColor();
     }
@@ -679,7 +678,8 @@ void ui_viewport_overlay(UIState& state)
     ImGui::End();
     ImGui::PopStyleColor();
 
-    // Selection mode buttons — bottom center of viewport
+    // Selection mode buttons — bottom center of viewport (Model mode only)
+    if (state.editorMode != EditorMode::Model) return;
     float vpW = vp->Size.x - toolbarWidth() - rightPanelWidth();
     float selBtnSz = s(24);
     float selGap = s(4);
