@@ -651,10 +651,45 @@ void ui_viewport_overlay(UIState& state)
         ImGui::PushStyleColor(ImGuiCol_PopupBg, {0.15f, 0.15f, 0.18f, 0.95f});
         if (ImGui::BeginPopup("##TexSettings")) {
             ImGui::Text("Light Direction");
-            ImGui::SetNextItemWidth(s(80));
-            ImGui::SliderFloat("X", &state.lightAngleX, 0.0f, 360.0f, "%.0f");
-            ImGui::SetNextItemWidth(s(80));
-            ImGui::SliderFloat("Y", &state.lightAngleY, 0.0f, 360.0f, "%.0f");
+
+            // Circle drag widget
+            float radius = s(40);
+            float dotR = s(4);
+            ImVec2 cPos = ImGui::GetCursorScreenPos();
+            ImVec2 center = {cPos.x + radius, cPos.y + radius};
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            // Invisible button for interaction
+            ImGui::InvisibleButton("##LightCircle", {radius * 2, radius * 2});
+            bool dragging = ImGui::IsItemActive();
+            if (dragging) {
+                ImVec2 mouse = ImGui::GetIO().MousePos;
+                float dx = mouse.x - center.x;
+                float dy = mouse.y - center.y;
+                // Map to angles: X = horizontal angle (0-360), Y = distance from center mapped to vertical
+                state.lightAngleX = fmodf(atan2f(dx, -dy) * 57.2957795f + 360.0f, 360.0f);
+                float dist = sqrtf(dx * dx + dy * dy) / radius;
+                if (dist > 1.0f) dist = 1.0f;
+                state.lightAngleY = 90.0f - dist * 90.0f; // center = 90 (top), edge = 0 (horizon)
+            }
+
+            // Draw circle background
+            dl->AddCircleFilled(center, radius, IM_COL32(30, 30, 35, 255), 32);
+            dl->AddCircle(center, radius, IM_COL32(80, 80, 90, 255), 32, 1.5f);
+            // Crosshair
+            dl->AddLine({center.x - radius, center.y}, {center.x + radius, center.y}, IM_COL32(50, 50, 60, 255));
+            dl->AddLine({center.x, center.y - radius}, {center.x, center.y + radius}, IM_COL32(50, 50, 60, 255));
+
+            // Dot position from angles
+            float rx = glm::radians(state.lightAngleX);
+            float dist = (90.0f - state.lightAngleY) / 90.0f;
+            if (dist < 0.0f) dist = 0.0f;
+            if (dist > 1.0f) dist = 1.0f;
+            float dotX = center.x + sinf(rx) * dist * radius;
+            float dotY = center.y - cosf(rx) * dist * radius;
+            dl->AddCircleFilled({dotX, dotY}, dotR, IM_COL32(255, 200, 60, 255));
+            dl->AddCircle({dotX, dotY}, dotR, IM_COL32(255, 255, 255, 200), 12, 1.0f);
+
             ImGui::Checkbox("Unlit", &state.unlit);
             ImGui::EndPopup();
         }
