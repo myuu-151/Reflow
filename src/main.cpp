@@ -1215,24 +1215,37 @@ int main()
     glfwMakeContextCurrent(win);
     glfwSwapInterval(1);
 
-    // Set window icon (title bar + taskbar)
+    // Set window icon (title bar + taskbar) — multiple sizes for crisp scaling
     {
 #ifdef _WIN32
         char exePath[MAX_PATH];
         GetModuleFileNameA(nullptr, exePath, MAX_PATH);
         std::string dir(exePath);
         dir = dir.substr(0, dir.find_last_of("\\/") + 1);
-        std::string iconPath = dir + "res/reflow_icon.png";
 #else
-        std::string iconPath = "res/reflow_icon.png";
+        std::string dir = "";
 #endif
-        int w, h, ch;
-        unsigned char* px = stbi_load(iconPath.c_str(), &w, &h, &ch, 4);
-        if (px) {
-            GLFWimage img = { w, h, px };
-            glfwSetWindowIcon(win, 1, &img);
-            stbi_image_free(px);
+        const char* iconFiles[] = {
+            "res/reflow_icon_16.png",
+            "res/reflow_icon_32.png",
+            "res/reflow_icon_48.png",
+            "res/reflow_icon.png",
+        };
+        GLFWimage imgs[4];
+        unsigned char* pxData[4] = {};
+        int imgCount = 0;
+        for (int i = 0; i < 4; i++) {
+            std::string path = dir + iconFiles[i];
+            int w, h, ch;
+            pxData[i] = stbi_load(path.c_str(), &w, &h, &ch, 4);
+            if (pxData[i]) {
+                imgs[imgCount++] = { w, h, pxData[i] };
+            }
         }
+        if (imgCount > 0)
+            glfwSetWindowIcon(win, imgCount, imgs);
+        for (int i = 0; i < 4; i++)
+            if (pxData[i]) stbi_image_free(pxData[i]);
     }
 
     glfwSetFramebufferSizeCallback(win, cb_resize);

@@ -132,14 +132,15 @@ void ui_init(GLFWwindow* win)
 
     // Load logo icon as OpenGL texture
     int w, h, channels;
-    std::string logoPath = exe_relative("res/reflow_icon.png");
+    std::string logoPath = exe_relative("res/reflow_icon_48.png");
     unsigned char* pixels = stbi_load(logoPath.c_str(), &w, &h, &channels, 4);
     if (pixels) {
         glGenTextures(1, &g_logoTexture);
         glBindTexture(GL_TEXTURE_2D, g_logoTexture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glGenerateMipmap(GL_TEXTURE_2D);
         g_logoW = w;
         g_logoH = h;
         stbi_image_free(pixels);
