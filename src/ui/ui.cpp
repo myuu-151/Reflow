@@ -252,11 +252,13 @@ void ui_top_bar(UIState& state)
 
     // Filename
     ImGui::SameLine(s(93));
-    ImGui::SetCursorPosY(s(10));
+    float barMid = s(8);
+    ImGui::SetCursorPosY(barMid);
     ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
     ImGui::Text("|");
     ImGui::PopStyleColor();
     ImGui::SameLine();
+    ImGui::SetCursorPosY(barMid);
     ImGui::Text("%s", state.filename.c_str());
     ImGui::SameLine();
     if (state.fileModified) {
@@ -320,13 +322,31 @@ void ui_top_bar(UIState& state)
     ImGui::SameLine(0, iconGap);
     // Menu icons use Material Icons font
     if (g_iconFont) ImGui::PushFont(g_iconFont);
-    if (ImGui::Button(ICON_MENU, {iconBtnSize, iconBtnSize})) { /* TODO */ }
+    if (ImGui::Button(ICON_MENU, {iconBtnSize, iconBtnSize}))
+        ImGui::OpenPopup("##FileMenu");
     ImGui::SameLine(0, iconGap);
     if (ImGui::Button(ICON_MORE_VERT, {iconBtnSize, iconBtnSize}))
         ImGui::OpenPopup("##MoreMenu");
     if (g_iconFont) ImGui::PopFont();
 
     ImGui::PopStyleColor(3);
+
+    // File menu popup
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, Colors::panelDark());
+    if (ImGui::BeginPopup("##FileMenu")) {
+        if (ImGui::MenuItem("New"))          { state.pendingAction = UIAction::New; }
+        if (ImGui::MenuItem("Open..."))      { state.pendingAction = UIAction::Open; }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Save"))         { state.pendingAction = UIAction::Save; }
+        if (ImGui::MenuItem("Save As..."))   { state.pendingAction = UIAction::SaveAs; }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Import"))   { state.pendingAction = UIAction::Import; }
+        if (ImGui::MenuItem("Export"))   { state.pendingAction = UIAction::Export; }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Quit"))         { glfwSetWindowShouldClose(glfwGetCurrentContext(), GLFW_TRUE); }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor();
 
     // More menu popup
     ImGui::PushStyleColor(ImGuiCol_PopupBg, Colors::panelDark());

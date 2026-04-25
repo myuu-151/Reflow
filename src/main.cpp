@@ -18,6 +18,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <commdlg.h>
 #endif
 
 // ---------------------------------------------------------------------------
@@ -714,6 +715,118 @@ static void render_viewport()
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// File dialogs (Windows native)
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+static std::string file_dialog_save(const char* filter, const char* defExt)
+{
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = defExt;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+    if (GetSaveFileNameA(&ofn)) return std::string(path);
+    return {};
+}
+
+static std::string file_dialog_open(const char* filter)
+{
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameA(&ofn)) return std::string(path);
+    return {};
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Handle file menu actions
+// ---------------------------------------------------------------------------
+static void handle_ui_actions(GLFWwindow* win)
+{
+    if (g_uiState.pendingAction == rf::UIAction::None) return;
+
+    rf::UIAction action = g_uiState.pendingAction;
+    g_uiState.pendingAction = rf::UIAction::None;
+
+    switch (action) {
+        case rf::UIAction::New:
+            g_meshes.clear();
+            g_meshes.push_back(rf::Mesh::create_cube());
+            g_selectedMesh = 0;
+            g_uiState.filename = "untitled.rflw";
+            g_uiState.filepath.clear();
+            g_uiState.fileModified = false;
+            break;
+
+        case rf::UIAction::Save:
+            if (g_uiState.filepath.empty()) {
+                // No path yet — do Save As
+                g_uiState.pendingAction = rf::UIAction::SaveAs;
+                return;
+            }
+            if (rf::save_project(g_uiState.filepath, g_meshes)) {
+                g_uiState.fileModified = false;
+            }
+            break;
+
+        case rf::UIAction::SaveAs: {
+#ifdef _WIN32
+            std::string path = file_dialog_save("Reflow Project (*.rflw)\0*.rflw\0All Files\0*.*\0", "rflw");
+            if (!path.empty()) {
+                if (rf::save_project(path, g_meshes)) {
+                    g_uiState.filepath = path;
+                    // Extract filename from path
+                    size_t sep = path.find_last_of("\\/");
+                    g_uiState.filename = (sep != std::string::npos) ? path.substr(sep + 1) : path;
+                    g_uiState.fileModified = false;
+                }
+            }
+#endif
+            break;
+        }
+
+        case rf::UIAction::Open: {
+#ifdef _WIN32
+            std::string path = file_dialog_open("Reflow Project (*.rflw)\0*.rflw\0All Files\0*.*\0");
+            if (!path.empty()) {
+                if (rf::load_project(path, g_meshes)) {
+                    g_selectedMesh = 0;
+                    g_uiState.filepath = path;
+                    size_t sep = path.find_last_of("\\/");
+                    g_uiState.filename = (sep != std::string::npos) ? path.substr(sep + 1) : path;
+                    g_uiState.fileModified = false;
+                }
+            }
+#endif
+            break;
+        }
+
+        case rf::UIAction::Export: {
+#ifdef _WIN32
+            std::string path = file_dialog_save("OBJ File (*.obj)\0*.obj\0All Files\0*.*\0", "obj");
+            if (!path.empty() && !g_meshes.empty()) {
+                g_meshes[g_selectedMesh].export_obj(path);
+            }
+#endif
+            break;
+        }
+
+        default: break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 int main()
 {
     if (!glfwInit()) {
@@ -793,6 +906,7 @@ int main()
 
         // Update transform mode (grab/scale/rotate)
         update_transform(win);
+        handle_ui_actions(win);
 
         // Clear full window
         glViewport(0, 0, g_winW, g_winH);

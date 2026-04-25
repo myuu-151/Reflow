@@ -1,5 +1,6 @@
 #include "mesh/mesh.h"
 #include <fstream>
+#include <sstream>
 #include <cmath>
 #include <map>
 #include <set>
@@ -702,6 +703,176 @@ void Mesh::delete_selected()
 
     recalc_normals();
     rebuild_gpu();
+}
+
+// ---------------------------------------------------------------------------
+// Project save
+// ---------------------------------------------------------------------------
+bool save_project(const std::string& path, const std::vector<Mesh>& meshes)
+{
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+
+    f << "RFLW 1\n";
+    f << "meshes " << meshes.size() << "\n";
+
+    for (auto& m : meshes) {
+        f << "mesh " << m.name << "\n";
+        f << "position " << m.position.x << " " << m.position.y << " " << m.position.z << "\n";
+
+        f << "vertices " << m.verts.size() << "\n";
+        for (auto& v : m.verts)
+            f << "v " << v.pos.x << " " << v.pos.y << " " << v.pos.z
+              << " " << v.uv.x << " " << v.uv.y << "\n";
+
+        // Collect face vertex loops
+        f << "faces " << m.faces.size() << "\n";
+        for (auto& face : m.faces) {
+            std::vector<int> fv;
+            int start = face.edge;
+            int cur = start;
+            do {
+                fv.push_back(m.hedges[cur].vertex);
+                cur = m.hedges[cur].next;
+            } while (cur != start && (int)fv.size() < 64);
+
+            f << "f " << fv.size();
+            for (int vi : fv) f << " " << vi;
+            f << "\n";
+        }
+
+        f << "endmesh\n";
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Project load
+// ---------------------------------------------------------------------------
+bool load_project(const std::string& path, std::vector<Mesh>& meshes)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    std::string line;
+    // Header
+    if (!std::getline(f, line)) return false;
+    if (line.substr(0, 4) != "RFLW") return false;
+
+    int meshCount = 0;
+    if (!std::getline(f, line)) return false;
+    std::istringstream(line) >> line >> meshCount;
+
+    meshes.clear();
+
+    for (int mi = 0; mi < meshCount; mi++) {
+        Mesh m;
+
+        // "mesh Name"
+        if (!std::getline(f, line)) return false;
+        m.name = line.substr(5);
+
+        // "position x y z"
+        if (!std::getline(f, line)) return false;
+        std::istringstream(line) >> line >> m.position.x >> m.position.y >> m.position.z;
+
+        // "vertices N"
+        int vertCount = 0;
+        if (!std::getline(f, line)) return false;
+        std::istringstream(line) >> line >> vertCount;
+
+        for (int i = 0; i < vertCount; i++) {
+            if (!std::getline(f, line)) return false;
+            MeshVertex v;
+            v.edge = -1;
+            v.selected = false;
+            std::string tag;
+            std::istringstream(line) >> tag >> v.pos.x >> v.pos.y >> v.pos.z >> v.uv.x >> v.uv.y;
+            m.verts.push_back(v);
+        }
+
+        // "faces N"
+        int faceCount = 0;
+        if (!std::getline(f, line)) return false;
+        std::istringstream(line) >> line >> faceCount;
+
+        // Read face vertex loops and build half-edge structure
+        struct FLoop { std::vector<int> v; };
+        std::vector<FLoop> faceLoops;
+
+        for (int i = 0; i < faceCount; i++) {
+            if (!std::getline(f, line)) return false;
+            std::istringstream iss(line);
+            std::string tag;
+            int n;
+            iss >> tag >> n;
+            FLoop fl;
+            for (int j = 0; j < n; j++) {
+                int vi;
+                iss >> vi;
+                fl.v.push_back(vi);
+            }
+            faceLoops.push_back(fl);
+        }
+
+        // Build half-edge topology
+        for (auto& fl : faceLoops) {
+            int fi = (int)m.faces.size();
+            int base = (int)m.hedges.size();
+            int n = (int)fl.v.size();
+
+            for (int i = 0; i < n; i++) {
+                HEdge he;
+                he.vertex = fl.v[(i + 1) % n];
+                he.face = fi;
+                he.next = base + (i + 1) % n;
+                he.prev = base + (i + n - 1) % n;
+                he.twin = -1;
+                m.hedges.push_back(he);
+                m.verts[fl.v[i]].edge = base + i;
+            }
+
+            Face face;
+            face.edge = base;
+            face.selected = false;
+            face.normal = {0, 0, 0};
+            m.faces.push_back(face);
+        }
+
+        // Link twins
+        for (int i = 0; i < (int)m.hedges.size(); i++) {
+            if (m.hedges[i].twin >= 0) continue;
+            int iTo = m.hedges[i].vertex;
+            int iFrom = m.hedges[m.hedges[i].prev].vertex;
+            for (int j = i + 1; j < (int)m.hedges.size(); j++) {
+                if (m.hedges[j].twin >= 0) continue;
+                if (m.hedges[m.hedges[j].prev].vertex == iTo && m.hedges[j].vertex == iFrom) {
+                    m.hedges[i].twin = j;
+                    m.hedges[j].twin = i;
+                    break;
+                }
+            }
+        }
+
+        // Build edge list
+        std::vector<bool> visited(m.hedges.size(), false);
+        for (int i = 0; i < (int)m.hedges.size(); i++) {
+            if (visited[i]) continue;
+            visited[i] = true;
+            if (m.hedges[i].twin >= 0) visited[m.hedges[i].twin] = true;
+            m.edges.push_back({i, false});
+        }
+
+        // "endmesh"
+        if (!std::getline(f, line)) return false;
+
+        m.recalc_normals();
+        m.rebuild_gpu();
+        meshes.push_back(std::move(m));
+    }
+
+    return true;
 }
 
 } // namespace rf

@@ -28,13 +28,17 @@ namespace Colors {
     inline ImVec4 green()     { return {0.30f, 0.75f, 0.40f, 1.0f}; }
 }
 
+enum class UIAction { None, New, Open, Save, SaveAs, Import, Export };
+
 struct UIState {
     Tool currentTool = Tool::Select;
     EditorMode editorMode = EditorMode::Model;
     SelectMode selectMode = SelectMode::Object;
     bool fileModified = false;
     std::string filename = "untitled.rflw";
+    std::string filepath;  // full path to current project file
     float uiScale = 2.5f;
+    UIAction pendingAction = UIAction::None;
 };
 
 void ui_init(GLFWwindow* win);

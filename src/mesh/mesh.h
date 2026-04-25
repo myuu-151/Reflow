@@ -91,4 +91,8 @@ struct Mesh {
     int count_selected_edges() const;
 };
 
+// Project file I/O
+bool save_project(const std::string& path, const std::vector<Mesh>& meshes);
+bool load_project(const std::string& path, std::vector<Mesh>& meshes);
+
 } // namespace rf
