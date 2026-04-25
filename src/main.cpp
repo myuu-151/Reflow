@@ -320,18 +320,21 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
         }
     }
 
-    // LMB: confirm transform or start box select
+    // LMB: confirm transform, deselect object, or start box select
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         if (g_transformMode != 0) {
             confirm_transform();
         } else {
             double mx, my;
             glfwGetCursorPos(win, &mx, &my);
-            if (mouse_in_viewport(mx, my) && g_uiState.editorMode == rf::EditorMode::Model
-                && g_uiState.selectMode != rf::SelectMode::Object) {
-                g_boxSelecting = true;
-                g_boxStartX = mx; g_boxStartY = my;
-                g_boxEndX = mx; g_boxEndY = my;
+            if (mouse_in_viewport(mx, my)) {
+                if (g_uiState.selectMode == rf::SelectMode::Object) {
+                    g_objectSelected = false;
+                } else if (g_uiState.editorMode == rf::EditorMode::Model) {
+                    g_boxSelecting = true;
+                    g_boxStartX = mx; g_boxStartY = my;
+                    g_boxEndX = mx; g_boxEndY = my;
+                }
             }
         }
     }
