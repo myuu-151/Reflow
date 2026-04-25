@@ -40,6 +40,12 @@ static constexpr const char* ICON_SELECT    = "\xEE\x97\x88"; // U+E5C8 near_me 
 static constexpr const char* ICON_MOVE      = "\xEE\xA2\x9F"; // U+E89F open_with (4-way arrows)
 static constexpr const char* ICON_ROTATE    = "\xEE\xA1\xA3"; // U+E863 autorenew (rotate)
 static constexpr const char* ICON_SCALE     = "\xEE\x8F\x82"; // U+E3C2 crop_free (square with corners)
+
+// Selection mode icons
+static constexpr const char* ICON_SEL_OBJ   = "\xEE\xA0\xB5"; // U+E835 checkbox_outline (cube wireframe)
+static constexpr const char* ICON_SEL_VTX   = "\xEE\x97\x83"; // U+E5C3 apps (grid dots)
+static constexpr const char* ICON_SEL_EDGE  = "\xEE\xA3\xB2"; // U+E8F2 view_column (parallel lines)
+static constexpr const char* ICON_SEL_FACE  = "\xEE\x81\x87"; // U+E047 stop (solid square)
 static constexpr const char* ICON_BOX       = "\xEE\xA0\x8E"; // U+E80E 3d_rotation (cube)
 
 static ImFont* g_iconFont = nullptr;
@@ -373,30 +379,6 @@ void ui_toolbar(UIState& state)
         ImGui::Spacing();
     }
 
-    // Selection mode buttons at bottom
-    ImGui::SetCursorPosY(h - s(40));
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    const char* selNames[] = {"Obj", "Vtx", "Edge", "Face"};
-    SelectMode selModes[] = {SelectMode::Object, SelectMode::Vertex, SelectMode::Edge, SelectMode::Face};
-
-    ImGui::SetCursorPosX(s(9));
-    for (int i = 0; i < 4; i++) {
-        bool active = (state.selectMode == selModes[i]);
-        if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button, Colors::accent());
-        else
-            ImGui::PushStyleColor(ImGuiCol_Button, Colors::input());
-
-        float selBtnSz = s(21);
-        if (ImGui::Button(selNames[i], {selBtnSz, selBtnSz}))
-            state.selectMode = selModes[i];
-
-        ImGui::PopStyleColor();
-        if (i < 3) ImGui::SameLine();
-    }
-
     ImGui::End();
     ImGui::PopStyleColor();
 }
@@ -564,6 +546,58 @@ void ui_viewport_overlay(UIState& state)
     // Z axis (blue)
     dl->AddLine(center, {center.x - len * 0.6f, center.y + len * 0.6f}, IM_COL32(80, 120, 230, 255), 2.0f);
     dl->AddText({center.x - len * 0.6f - s(10), center.y + len * 0.6f - s(1)}, IM_COL32(80, 120, 230, 255), "Z");
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    // Selection mode buttons — bottom center of viewport
+    float vpW = vp->Size.x - toolbarWidth() - rightPanelWidth();
+    float selBtnSz = s(24);
+    float selGap = s(4);
+    float totalSelW = selBtnSz * 4 + selGap * 3;
+    float selX = vpX + (vpW - totalSelW) * 0.5f;
+    float selY = vp->Pos.y + vp->Size.y - statusBarHeight() - selBtnSz - s(10);
+
+    ImGui::SetNextWindowPos({selX - s(6), selY - s(6)});
+    ImGui::SetNextWindowSize({0, 0});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.12f, 0.12f, 0.14f, 0.85f});
+    ImGui::Begin("##SelMode", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing);
+
+    struct SelDef { SelectMode mode; const char* icon; const char* id; };
+    SelDef selDefs[] = {
+        {SelectMode::Object, ICON_SEL_OBJ,  "##selObj"},
+        {SelectMode::Vertex, ICON_SEL_VTX,  "##selVtx"},
+        {SelectMode::Edge,   ICON_SEL_EDGE, "##selEdge"},
+        {SelectMode::Face,   ICON_SEL_FACE, "##selFace"},
+    };
+
+    for (int i = 0; i < 4; i++) {
+        bool active = (state.selectMode == selDefs[i].mode);
+        if (active)
+            ImGui::PushStyleColor(ImGuiCol_Button, Colors::accent());
+        else
+            ImGui::PushStyleColor(ImGuiCol_Button, Colors::input());
+
+        ImVec2 btnPos = ImGui::GetCursorScreenPos();
+        if (ImGui::Button(selDefs[i].id, {selBtnSz, selBtnSz}))
+            state.selectMode = selDefs[i].mode;
+
+        // Draw icon centered on button
+        if (g_iconFont) {
+            float iconSz = s(11);
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            float ix = btnPos.x + (selBtnSz - iconSz) * 0.5f;
+            float iy = btnPos.y + (selBtnSz - iconSz) * 0.5f;
+            drawList->AddText(g_iconFont, iconSz, ImVec2(ix, iy),
+                ImGui::GetColorU32(ImGuiCol_Text), selDefs[i].icon);
+        }
+
+        ImGui::PopStyleColor();
+        if (i < 3) ImGui::SameLine(0, selGap);
+    }
 
     ImGui::End();
     ImGui::PopStyleColor();
