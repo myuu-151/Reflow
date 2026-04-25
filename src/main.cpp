@@ -199,49 +199,51 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
         g_rmb_down = (action == GLFW_PRESS);
         glfwGetCursorPos(win, &g_lastX, &g_lastY);
-        // Cancel transform on right click
-        if (action == GLFW_PRESS && g_transformMode != 0) {
-            cancel_transform();
-            return;
+
+        // RMB: confirm transform or pick elements
+        if (action == GLFW_PRESS) {
+            if (g_transformMode != 0) {
+                confirm_transform();
+                return;
+            }
+
+            double mx, my;
+            glfwGetCursorPos(win, &mx, &my);
+            if (!mouse_in_viewport(mx, my)) return;
+            if (g_meshes.empty()) return;
+
+            glm::vec3 rayO, rayD;
+            screen_to_ray(mx, my, rayO, rayD);
+
+            auto& mesh = g_meshes[g_selectedMesh];
+            bool shift = (mods & GLFW_MOD_SHIFT) != 0;
+            if (!shift) mesh.deselect_all();
+
+            switch (g_uiState.selectMode) {
+                case rf::SelectMode::Vertex: {
+                    int vi = mesh.pick_vertex(rayO, rayD);
+                    if (vi >= 0) mesh.verts[vi].selected = !mesh.verts[vi].selected || !shift;
+                    break;
+                }
+                case rf::SelectMode::Edge: {
+                    int ei = mesh.pick_edge(rayO, rayD);
+                    if (ei >= 0) mesh.edges[ei].selected = !mesh.edges[ei].selected || !shift;
+                    break;
+                }
+                case rf::SelectMode::Face: {
+                    int fi = mesh.pick_face(rayO, rayD);
+                    if (fi >= 0) mesh.faces[fi].selected = !mesh.faces[fi].selected || !shift;
+                    break;
+                }
+                default: break;
+            }
         }
     }
 
-    // Left click: confirm transform or pick elements
+    // LMB: confirm transform
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         if (g_transformMode != 0) {
             confirm_transform();
-            return;
-        }
-
-        double mx, my;
-        glfwGetCursorPos(win, &mx, &my);
-        if (!mouse_in_viewport(mx, my)) return;
-        if (g_meshes.empty()) return;
-
-        glm::vec3 rayO, rayD;
-        screen_to_ray(mx, my, rayO, rayD);
-
-        auto& mesh = g_meshes[g_selectedMesh];
-        bool shift = (mods & GLFW_MOD_SHIFT) != 0;
-        if (!shift) mesh.deselect_all();
-
-        switch (g_uiState.selectMode) {
-            case rf::SelectMode::Vertex: {
-                int vi = mesh.pick_vertex(rayO, rayD);
-                if (vi >= 0) mesh.verts[vi].selected = !mesh.verts[vi].selected || !shift;
-                break;
-            }
-            case rf::SelectMode::Edge: {
-                int ei = mesh.pick_edge(rayO, rayD);
-                if (ei >= 0) mesh.edges[ei].selected = !mesh.edges[ei].selected || !shift;
-                break;
-            }
-            case rf::SelectMode::Face: {
-                int fi = mesh.pick_face(rayO, rayD);
-                if (fi >= 0) mesh.faces[fi].selected = !mesh.faces[fi].selected || !shift;
-                break;
-            }
-            default: break;
         }
     }
 }
@@ -537,24 +539,17 @@ static void render_viewport()
         glDrawArrays(GL_TRIANGLES, 0, mesh.triCount * 3);
     }
 
-    // Wireframe overlay
+    // Wireframe overlay (actual edges, not triangulated)
     g_wireShader.use();
-    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    glEnable(GL_POLYGON_OFFSET_LINE);
-    glPolygonOffset(-1.0f, -1.0f);
-
     for (auto& mesh : g_meshes) {
         glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
         glm::mat4 mvp = vp * model;
         g_wireShader.set_mat4("uMVP", mvp);
         g_wireShader.set_vec3("uColor", kWireColor);
 
-        glBindVertexArray(mesh.vao);
-        glDrawArrays(GL_TRIANGLES, 0, mesh.triCount * 3);
+        glBindVertexArray(mesh.wireVao);
+        glDrawArrays(GL_LINES, 0, mesh.wireLineCount * 2);
     }
-
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glDisable(GL_POLYGON_OFFSET_LINE);
 
     // --- Selection overlay ---
     if (!g_meshes.empty() && g_uiState.selectMode != rf::SelectMode::Object) {
@@ -567,6 +562,7 @@ static void render_viewport()
             glGenBuffers(1, &g_selVBO);
         }
 
+        glBindVertexArray(g_selVAO);
         g_wireShader.use();
         g_wireShader.set_mat4("uMVP", mvp);
 
@@ -584,7 +580,6 @@ static void render_viewport()
                 }
             }
             if (!buf.empty()) {
-                glBindVertexArray(g_selVAO);
                 glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
@@ -630,7 +625,6 @@ static void render_viewport()
                 buf.push_back(pb.x); buf.push_back(pb.y); buf.push_back(pb.z);
             }
             if (!buf.empty()) {
-                glBindVertexArray(g_selVAO);
                 glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
@@ -665,7 +659,6 @@ static void render_viewport()
                 }
             }
             if (!buf.empty()) {
-                glBindVertexArray(g_selVAO);
                 glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
                 glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
@@ -697,7 +690,6 @@ static void render_viewport()
             buf.push_back(a.x); buf.push_back(a.y); buf.push_back(a.z);
             buf.push_back(b.x); buf.push_back(b.y); buf.push_back(b.z);
 
-            glBindVertexArray(g_selVAO);
             glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
             glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
             glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);

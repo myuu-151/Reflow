@@ -57,6 +57,8 @@ struct Mesh {
     // GPU buffers (rebuilt on edit)
     GLuint vao = 0, vbo = 0, ebo = 0;
     int triCount = 0;
+    GLuint wireVao = 0, wireVbo = 0;
+    int wireLineCount = 0;
 
     void rebuild_gpu();
     void recalc_normals();

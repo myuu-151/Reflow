@@ -63,6 +63,32 @@ void Mesh::rebuild_gpu()
     glEnableVertexAttribArray(2);
 
     glBindVertexArray(0);
+
+    // Build wireframe edge buffer (actual edges, not triangulated)
+    std::vector<float> wireBuf;
+    for (auto& e : edges) {
+        int he = e.he;
+        int va = hedges[hedges[he].prev].vertex;
+        int vb = hedges[he].vertex;
+        wireBuf.push_back(verts[va].pos.x);
+        wireBuf.push_back(verts[va].pos.y);
+        wireBuf.push_back(verts[va].pos.z);
+        wireBuf.push_back(verts[vb].pos.x);
+        wireBuf.push_back(verts[vb].pos.y);
+        wireBuf.push_back(verts[vb].pos.z);
+    }
+    wireLineCount = (int)edges.size();
+
+    if (!wireVao) {
+        glGenVertexArrays(1, &wireVao);
+        glGenBuffers(1, &wireVbo);
+    }
+    glBindVertexArray(wireVao);
+    glBindBuffer(GL_ARRAY_BUFFER, wireVbo);
+    glBufferData(GL_ARRAY_BUFFER, wireBuf.size() * sizeof(float), wireBuf.data(), GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +538,7 @@ void Mesh::extrude_selected_faces()
                 if (!shared) {
                     FLoop side;
                     side.sel = false;
-                    side.v = {b, a, dupMap[a], dupMap[b]};
+                    side.v = {a, b, dupMap[b], dupMap[a]};
                     newLoops.push_back(side);
                 }
             }
