@@ -1227,9 +1227,9 @@ static void render_viewport()
                 glEnableVertexAttribArray(0);
                 g_wireShader.set_vec3("uColor", kSelectColor);
                 glLineWidth(1.5f);
-                glDepthFunc(GL_LEQUAL);
+                glDisable(GL_DEPTH_TEST);
                 glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
-                glDepthFunc(GL_LESS);
+                glEnable(GL_DEPTH_TEST);
                 glLineWidth(1.0f);
             }
         }
