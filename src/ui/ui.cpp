@@ -57,6 +57,9 @@ static int g_logoW = 0, g_logoH = 0;
 // Selection mode icon textures
 static GLuint g_selTex[4] = {}; // Object, Vertex, Edge, Face
 
+// Viewport shading icon textures
+static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
+
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
 static GLuint load_texture(const char* path)
 {
@@ -150,6 +153,17 @@ void ui_init(GLFWwindow* win)
     for (int i = 0; i < 4; i++) {
         std::string path = exe_relative(selIconFiles[i]);
         g_selTex[i] = load_texture(path.c_str());
+    }
+
+    // Load viewport shading icons
+    const char* viewModeFiles[] = {
+        "assets/b/sph_wf3.png",
+        "assets/b/sph_sld.png",
+        "assets/b/sph_txr.png",
+    };
+    for (int i = 0; i < 3; i++) {
+        std::string path = exe_relative(viewModeFiles[i]);
+        g_viewModeTex[i] = load_texture(path.c_str());
     }
 }
 
@@ -595,6 +609,44 @@ void ui_viewport_overlay(UIState& state)
 
     ImGui::End();
     ImGui::PopStyleColor();
+
+    // Viewport shading mode buttons — top right of viewport
+    {
+        float vpW = vp->Size.x - toolbarWidth() - rightPanelWidth();
+        float btnSz = s(22);
+        float gap = s(3);
+        float pad = ImGui::GetStyle().FramePadding.x;
+        float totalW = (btnSz + pad * 2) * 3 + gap * 2;
+        float shadX = vpX + vpW - totalW - s(16);
+        float shadY = vpY + s(6);
+
+        ImGui::SetNextWindowPos({shadX - s(4), shadY - s(4)});
+        ImGui::SetNextWindowSize({0, 0});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.12f, 0.12f, 0.14f, 0.85f});
+        ImGui::Begin("##ViewMode", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing);
+
+        ViewMode modes[] = {ViewMode::Wireframe, ViewMode::Solid, ViewMode::Textured};
+        for (int i = 0; i < 3; i++) {
+            bool active = (state.viewMode == modes[i]);
+            ImVec4 tint = active ? ImVec4(1, 1, 1, 1) : ImVec4(0.5f, 0.5f, 0.5f, 0.7f);
+
+            ImGui::PushStyleColor(ImGuiCol_Button, active ? ImVec4(0.25f, 0.25f, 0.3f, 1.0f) : ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.3f, 0.3f, 0.35f, 1.0f});
+            if (g_viewModeTex[i]) {
+                char id[16]; snprintf(id, sizeof(id), "vm%d", i);
+                if (ImGui::ImageButton(id, (ImTextureID)(intptr_t)g_viewModeTex[i], {btnSz, btnSz}, {0,0}, {1,1}, {0,0,0,0}, tint))
+                    state.viewMode = modes[i];
+            }
+            ImGui::PopStyleColor(2);
+            if (i < 2) ImGui::SameLine(0, gap);
+        }
+
+        ImGui::End();
+        ImGui::PopStyleColor();
+    }
 
     // Orientation gizmo (simple XYZ text for now)
     float gizX = vp->Pos.x + vp->Size.x - rightPanelWidth() - s(57);

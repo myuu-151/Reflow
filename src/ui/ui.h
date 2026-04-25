@@ -14,6 +14,9 @@ enum class EditorMode { Model, Sculpt, Paint, Rig, Animate, UV };
 // Selection modes
 enum class SelectMode { Object, Vertex, Edge, Face };
 
+// Viewport shading modes
+enum class ViewMode { Wireframe, Solid, Textured };
+
 // UI colors matching mockup
 namespace Colors {
     inline ImVec4 bg()        { return {0.11f, 0.11f, 0.13f, 1.0f}; }
@@ -34,6 +37,7 @@ struct UIState {
     Tool currentTool = Tool::Select;
     EditorMode editorMode = EditorMode::Model;
     SelectMode selectMode = SelectMode::Object;
+    ViewMode viewMode = ViewMode::Solid;
     bool fileModified = false;
     std::string filename = "untitled.rflw";
     std::string filepath;  // full path to current project file
