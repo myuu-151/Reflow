@@ -39,6 +39,8 @@ static bool g_objectSelected = false;
 static bool g_camAnimating = false;
 static glm::vec3 g_camAnimStartTarget, g_camAnimEndTarget;
 static float g_camAnimStartDist, g_camAnimEndDist;
+static float g_camAnimStartYaw, g_camAnimEndYaw;
+static float g_camAnimStartPitch, g_camAnimEndPitch;
 static float g_camAnimT = 0.0f;
 
 static rf::UIState g_uiState;
@@ -471,20 +473,11 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
     }
 
     switch (key) {
-        // Numpad views
-        case GLFW_KEY_KP_1: g_camera.yaw = 0;   g_camera.pitch = 0;  break;
-        case GLFW_KEY_KP_3: g_camera.yaw = 90;  g_camera.pitch = 0;  break;
-        case GLFW_KEY_KP_7: g_camera.yaw = 0;   g_camera.pitch = 89; break;
-
         // Tool shortcuts
         case GLFW_KEY_Q: g_uiState.currentTool = rf::Tool::Select; break;
         case GLFW_KEY_W: g_openNormalsMenu = true; break;
 
-        // Selection mode
-        case GLFW_KEY_1: g_uiState.selectMode = rf::SelectMode::Vertex; break;
-        case GLFW_KEY_2: g_uiState.selectMode = rf::SelectMode::Edge;   break;
-        case GLFW_KEY_3: g_uiState.selectMode = rf::SelectMode::Face;   break;
-        case GLFW_KEY_4: g_uiState.selectMode = rf::SelectMode::Object; break;
+        // View directions (Blender-style number keys)
 
         // Grab (G) / Alt+G snap to origin
         case GLFW_KEY_G:
@@ -678,6 +671,60 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                         for (auto& f : mesh.faces) f.selected = true;
                 }
             }
+            break;
+
+        // Numpad views (Blender-style)
+        case GLFW_KEY_1:
+        case GLFW_KEY_KP_1: // Front / Back
+        {
+            bool back = (mods & GLFW_MOD_SHIFT);
+            g_camAnimStartTarget = g_camera.target;
+            g_camAnimStartDist = g_camera.distance;
+            g_camAnimEndTarget = g_camera.target;
+            g_camAnimEndDist = g_camera.distance;
+            g_camAnimStartYaw = g_camera.yaw;
+            g_camAnimStartPitch = g_camera.pitch;
+            g_camAnimEndYaw = back ? 180.0f : 0.0f;
+            g_camAnimEndPitch = 0.0f;
+            g_camAnimT = 0.0f;
+            g_camAnimating = true;
+            break;
+        }
+        case GLFW_KEY_3:
+        case GLFW_KEY_KP_3: // Right / Left
+        {
+            bool left = (mods & GLFW_MOD_SHIFT);
+            g_camAnimStartTarget = g_camera.target;
+            g_camAnimStartDist = g_camera.distance;
+            g_camAnimEndTarget = g_camera.target;
+            g_camAnimEndDist = g_camera.distance;
+            g_camAnimStartYaw = g_camera.yaw;
+            g_camAnimStartPitch = g_camera.pitch;
+            g_camAnimEndYaw = left ? -90.0f : 90.0f;
+            g_camAnimEndPitch = 0.0f;
+            g_camAnimT = 0.0f;
+            g_camAnimating = true;
+            break;
+        }
+        case GLFW_KEY_7:
+        case GLFW_KEY_KP_7: // Top / Bottom
+        {
+            bool bottom = (mods & GLFW_MOD_SHIFT);
+            g_camAnimStartTarget = g_camera.target;
+            g_camAnimStartDist = g_camera.distance;
+            g_camAnimEndTarget = g_camera.target;
+            g_camAnimEndDist = g_camera.distance;
+            g_camAnimStartYaw = g_camera.yaw;
+            g_camAnimStartPitch = g_camera.pitch;
+            g_camAnimEndYaw = g_camera.yaw;
+            g_camAnimEndPitch = bottom ? -89.0f : 89.0f;
+            g_camAnimT = 0.0f;
+            g_camAnimating = true;
+            break;
+        }
+        case GLFW_KEY_5:
+        case GLFW_KEY_KP_5: // Toggle ortho/perspective
+            g_camera.ortho = !g_camera.ortho;
             break;
     }
 }
@@ -1530,8 +1577,12 @@ int main()
                 }
                 g_camAnimStartTarget = g_camera.target;
                 g_camAnimStartDist = g_camera.distance;
+                g_camAnimStartYaw = g_camera.yaw;
+                g_camAnimStartPitch = g_camera.pitch;
                 g_camAnimEndTarget = (mn + mx) * 0.5f + mesh.position;
                 g_camAnimEndDist = glm::length(mx - mn) * 2.5f * 0.5f;
+                g_camAnimEndYaw = g_camera.yaw;
+                g_camAnimEndPitch = g_camera.pitch;
                 g_camAnimT = 0.0f;
                 g_camAnimating = true;
             }
@@ -1546,6 +1597,8 @@ int main()
             float t = g_camAnimT * g_camAnimT * (3.0f - 2.0f * g_camAnimT); // smoothstep
             g_camera.target = glm::mix(g_camAnimStartTarget, g_camAnimEndTarget, t);
             g_camera.distance = glm::mix(g_camAnimStartDist, g_camAnimEndDist, t);
+            g_camera.yaw = glm::mix(g_camAnimStartYaw, g_camAnimEndYaw, t);
+            g_camera.pitch = glm::mix(g_camAnimStartPitch, g_camAnimEndPitch, t);
         }
 
         // Clear full window

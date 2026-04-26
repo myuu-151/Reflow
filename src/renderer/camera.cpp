@@ -22,6 +22,11 @@ glm::mat4 Camera::get_view() const
 
 glm::mat4 Camera::get_projection(float aspect) const
 {
+    if (ortho) {
+        float h = distance * 0.5f;
+        float w = h * aspect;
+        return glm::ortho(-w, w, -h, h, 0.01f, 100.0f);
+    }
     return glm::perspective(glm::radians(fov), aspect, 0.01f, 100.0f);
 }
 

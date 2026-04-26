@@ -10,6 +10,7 @@ struct Camera {
     float yaw          = 45.0f;   // degrees
     float pitch        = 30.0f;   // degrees
     float fov          = 45.0f;
+    bool ortho         = false;
 
     // Orbit controls
     float orbitSpeed   = 0.3f;
