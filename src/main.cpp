@@ -48,6 +48,7 @@ static float g_camAnimT = 0.0f;
 static rf::UIState g_uiState;
 static bool g_openNormalsMenu = false;
 static bool g_openDeleteConfirm = false;
+static bool g_openDeleteMenu = false;
 
 // Input state
 static bool g_mmb_down = false;
@@ -86,6 +87,143 @@ static std::vector<glm::vec3> g_grab_origPos;
 static std::vector<int> g_grab_vertIdx;
 static float g_scale_start_dist = 1.0f; // for scale mode
 static float g_rotate_start_angle = 0.0f; // for rotate mode
+
+// Undo/Redo
+struct UndoState {
+    std::vector<rf::Mesh> meshes;
+    int selectedMesh;
+};
+static std::vector<UndoState> g_undoStack;
+static std::vector<UndoState> g_redoStack;
+static const int kMaxUndo = 64;
+
+static void push_undo() {
+    UndoState state;
+    state.meshes.resize(g_meshes.size());
+    for (int i = 0; i < (int)g_meshes.size(); i++) {
+        auto& src = g_meshes[i];
+        auto& dst = state.meshes[i];
+        dst.name = src.name;
+        dst.verts = src.verts;
+        dst.hedges = src.hedges;
+        dst.faces = src.faces;
+        dst.edges = src.edges;
+        dst.visible = src.visible;
+        dst.mirrorX = src.mirrorX;
+        dst.shadeSmooth = src.shadeSmooth;
+        dst.position = src.position;
+        dst.rotation = src.rotation;
+        dst.scale = src.scale;
+        // GPU buffers are NOT copied — they get rebuilt on restore
+    }
+    state.selectedMesh = g_selectedMesh;
+    g_undoStack.push_back(std::move(state));
+    if ((int)g_undoStack.size() > kMaxUndo)
+        g_undoStack.erase(g_undoStack.begin());
+    g_redoStack.clear();
+}
+
+static void restore_state(UndoState& state) {
+    // Free old GPU buffers
+    for (auto& m : g_meshes) {
+        if (m.vao) glDeleteVertexArrays(1, &m.vao);
+        if (m.vbo) glDeleteBuffers(1, &m.vbo);
+        if (m.ebo) glDeleteBuffers(1, &m.ebo);
+        if (m.wireVao) glDeleteVertexArrays(1, &m.wireVao);
+        if (m.wireVbo) glDeleteBuffers(1, &m.wireVbo);
+    }
+    g_meshes.resize(state.meshes.size());
+    for (int i = 0; i < (int)state.meshes.size(); i++) {
+        auto& src = state.meshes[i];
+        auto& dst = g_meshes[i];
+        dst.name = src.name;
+        dst.verts = src.verts;
+        dst.hedges = src.hedges;
+        dst.faces = src.faces;
+        dst.edges = src.edges;
+        dst.visible = src.visible;
+        dst.mirrorX = src.mirrorX;
+        dst.shadeSmooth = src.shadeSmooth;
+        dst.position = src.position;
+        dst.rotation = src.rotation;
+        dst.scale = src.scale;
+        dst.vao = dst.vbo = dst.ebo = 0;
+        dst.wireVao = dst.wireVbo = 0;
+        dst.triCount = dst.wireLineCount = 0;
+        dst.recalc_normals();
+        dst.rebuild_gpu();
+    }
+    g_selectedMesh = state.selectedMesh;
+    if (g_selectedMesh >= (int)g_meshes.size()) g_selectedMesh = 0;
+}
+
+static void do_undo() {
+    if (g_undoStack.empty()) return;
+    // Save current state to redo
+    UndoState redo;
+    redo.meshes.resize(g_meshes.size());
+    for (int i = 0; i < (int)g_meshes.size(); i++) {
+        auto& src = g_meshes[i];
+        auto& dst = redo.meshes[i];
+        dst.name = src.name;
+        dst.verts = src.verts;
+        dst.hedges = src.hedges;
+        dst.faces = src.faces;
+        dst.edges = src.edges;
+        dst.visible = src.visible;
+        dst.mirrorX = src.mirrorX;
+        dst.shadeSmooth = src.shadeSmooth;
+        dst.position = src.position;
+        dst.rotation = src.rotation;
+        dst.scale = src.scale;
+    }
+    redo.selectedMesh = g_selectedMesh;
+    g_redoStack.push_back(std::move(redo));
+
+    auto state = std::move(g_undoStack.back());
+    g_undoStack.pop_back();
+    restore_state(state);
+}
+
+static void do_redo() {
+    if (g_redoStack.empty()) return;
+    // Save current state to undo
+    UndoState undo;
+    undo.meshes.resize(g_meshes.size());
+    for (int i = 0; i < (int)g_meshes.size(); i++) {
+        auto& src = g_meshes[i];
+        auto& dst = undo.meshes[i];
+        dst.name = src.name;
+        dst.verts = src.verts;
+        dst.hedges = src.hedges;
+        dst.faces = src.faces;
+        dst.edges = src.edges;
+        dst.visible = src.visible;
+        dst.mirrorX = src.mirrorX;
+        dst.shadeSmooth = src.shadeSmooth;
+        dst.position = src.position;
+        dst.rotation = src.rotation;
+        dst.scale = src.scale;
+    }
+    undo.selectedMesh = g_selectedMesh;
+    g_undoStack.push_back(std::move(undo));
+
+    auto state = std::move(g_redoStack.back());
+    g_redoStack.pop_back();
+    restore_state(state);
+}
+
+// Loop cut mode
+static bool g_loopCutMode = false;
+static int g_loopCutEdge = -1;         // hovered edge index
+static int g_loopCutCount = 1;         // number of cuts
+static std::vector<int> g_loopCutPreview; // edge indices forming the loop
+
+// Loop cut slide mode
+static bool g_loopSlideMode = false;
+static std::vector<rf::Mesh::SlideVert> g_slideData;
+static double g_slideStartY = 0;
+static float g_slideOffset = 0.0f;
 
 // Layout from ui.cpp (dynamic, scale-aware)
 
@@ -250,6 +388,8 @@ static void cancel_transform()
             mesh.verts[g_grab_vertIdx[i]].pos = g_grab_origPos[i];
         mesh.recalc_normals();
         mesh.rebuild_gpu();
+        // Remove the undo entry we pushed at start_transform
+        if (!g_undoStack.empty()) g_undoStack.pop_back();
     }
     g_transformMode = 0;
     g_grab_axis = -1;
@@ -264,6 +404,7 @@ static void confirm_transform()
 static void start_transform(int mode)
 {
     if (g_meshes.empty()) return;
+    push_undo();
     auto& mesh = g_meshes[g_selectedMesh];
 
     g_grab_vertIdx.clear();
@@ -385,6 +526,48 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
         }
     }
 
+    // LMB: confirm loop cut → enter slide mode
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS && g_loopCutMode) {
+        if (!g_loopCutPreview.empty() && g_loopCutEdge >= 0 && !g_meshes.empty()) {
+            push_undo();
+            g_slideData = g_meshes[g_selectedMesh].loop_cut(g_loopCutEdge, g_loopCutCount);
+            if (!g_slideData.empty()) {
+                g_loopSlideMode = true;
+                g_slideOffset = 0.0f;
+                double mx, my;
+                glfwGetCursorPos(win, &mx, &my);
+                g_slideStartY = my;
+            }
+        }
+        g_loopCutMode = false;
+        g_loopCutPreview.clear();
+        return;
+    }
+
+    // RMB: cancel loop cut
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS && g_loopCutMode) {
+        g_loopCutMode = false;
+        g_loopCutPreview.clear();
+        return;
+    }
+
+    // LMB: confirm slide
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS && g_loopSlideMode) {
+        g_loopSlideMode = false;
+        g_slideData.clear();
+        return;
+    }
+
+    // RMB: cancel slide (snap back to default position)
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS && g_loopSlideMode) {
+        if (!g_meshes.empty()) {
+            g_meshes[g_selectedMesh].slide_verts(g_slideData, 0.0f);
+        }
+        g_loopSlideMode = false;
+        g_slideData.clear();
+        return;
+    }
+
     // LMB: confirm transform, deselect object, or start box select
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         if (g_transformMode != 0) {
@@ -434,6 +617,28 @@ static void cb_cursor(GLFWwindow* win, double x, double y)
         g_boxEndY = y;
     }
 
+    // Slide mode: mouse Y controls slide offset
+    if (g_loopSlideMode && !g_meshes.empty()) {
+        g_slideOffset = (float)(y - g_slideStartY) / 150.0f;
+        g_slideOffset = glm::clamp(g_slideOffset, -0.95f, 0.95f);
+        g_meshes[g_selectedMesh].slide_verts(g_slideData, g_slideOffset);
+    }
+
+    // Update loop cut preview edge on mouse move
+    if (g_loopCutMode && !g_meshes.empty() && mouse_in_viewport(x, y)) {
+        glm::vec3 rayO, rayD;
+        screen_to_ray(x, y, rayO, rayD);
+        auto& mesh = g_meshes[g_selectedMesh];
+        int ei = mesh.pick_edge(rayO, rayD, 0.15f);
+        if (ei != g_loopCutEdge) {
+            g_loopCutEdge = ei;
+            if (ei >= 0)
+                g_loopCutPreview = mesh.find_edge_loop(ei);
+            else
+                g_loopCutPreview.clear();
+        }
+    }
+
     bool shift = (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
     bool alt   = (glfwGetKey(win, GLFW_KEY_LEFT_ALT) == GLFW_PRESS);
 
@@ -452,6 +657,12 @@ static void cb_cursor(GLFWwindow* win, double x, double y)
 static void cb_scroll(GLFWwindow*, double, double dy)
 {
     if (ImGui::GetIO().WantCaptureMouse) return;
+    if (g_loopCutMode) {
+        g_loopCutCount += (dy > 0) ? 1 : -1;
+        if (g_loopCutCount < 1) g_loopCutCount = 1;
+        if (g_loopCutCount > 50) g_loopCutCount = 50;
+        return;
+    }
     g_camera.zoom((float)dy);
 }
 
@@ -459,6 +670,37 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
 {
     if (ImGui::GetIO().WantTextInput) return;
     if (action != GLFW_PRESS) return;
+
+    // Undo: Ctrl+Z
+    if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL) && !(mods & GLFW_MOD_ALT)) {
+        do_undo();
+        return;
+    }
+    // Redo: Ctrl+Alt+Z
+    if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL) && (mods & GLFW_MOD_ALT)) {
+        do_redo();
+        return;
+    }
+
+    // During slide mode
+    if (g_loopSlideMode) {
+        if (key == GLFW_KEY_ESCAPE) {
+            if (!g_meshes.empty())
+                g_meshes[g_selectedMesh].slide_verts(g_slideData, 0.0f);
+            g_loopSlideMode = false;
+            g_slideData.clear();
+        }
+        return;
+    }
+
+    // During loop cut mode
+    if (g_loopCutMode) {
+        if (key == GLFW_KEY_ESCAPE) {
+            g_loopCutMode = false;
+            g_loopCutPreview.clear();
+        }
+        return;
+    }
 
     // During transform: axis constraints or cancel
     if (g_transformMode != 0) {
@@ -489,6 +731,7 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                     glm::vec3 center(0);
                     for (auto& v : mesh.verts) center += v.pos;
                     center /= (float)mesh.verts.size();
+                    push_undo();
                     for (auto& v : mesh.verts) v.pos -= center;
                     mesh.position = {0, 0, 0};
                     mesh.recalc_normals();
@@ -504,9 +747,18 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             start_transform(2);
             break;
 
-        // Rotate (R)
+        // Loop cut (Ctrl+R) or Rotate (R)
         case GLFW_KEY_R:
-            start_transform(3);
+            if ((mods & GLFW_MOD_CONTROL) && !g_meshes.empty() &&
+                g_uiState.selectMode != rf::SelectMode::Object &&
+                g_uiState.editorMode == rf::EditorMode::Model) {
+                g_loopCutMode = true;
+                g_loopCutEdge = -1;
+                g_loopCutCount = 1;
+                g_loopCutPreview.clear();
+            } else {
+                start_transform(3);
+            }
             break;
 
         // Extrude (E) — face mode only
@@ -514,6 +766,7 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             if (g_uiState.selectMode == rf::SelectMode::Face && !g_meshes.empty()) {
                 auto& mesh = g_meshes[g_selectedMesh];
                 if (mesh.count_selected_faces() > 0) {
+                    push_undo();
                     mesh.extrude_selected_faces();
                     // Auto-enter grab mode along face normal after extrude
                     start_transform(1);
@@ -521,16 +774,21 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             }
             break;
 
-        // X = delete mesh confirmation
+        // X = delete menu
         case GLFW_KEY_X:
-            if (g_uiState.selectMode == rf::SelectMode::Object && !g_meshes.empty() && g_objectSelected)
-                g_openDeleteConfirm = true;
+            if (!g_meshes.empty()) {
+                if (g_uiState.selectMode == rf::SelectMode::Object && g_objectSelected)
+                    g_openDeleteConfirm = true;
+                else if (g_uiState.selectMode != rf::SelectMode::Object)
+                    g_openDeleteMenu = true;
+            }
             break;
 
         // Delete
         case GLFW_KEY_DELETE:
         case GLFW_KEY_BACKSPACE:
             if (g_uiState.selectMode != rf::SelectMode::Object && !g_meshes.empty()) {
+                push_undo();
                 g_meshes[g_selectedMesh].delete_selected();
             }
             break;
@@ -1293,6 +1551,148 @@ static void render_viewport()
         glBindVertexArray(0);
     }
 
+    // Draw loop cut preview
+    if (g_loopCutMode && !g_meshes.empty() && !g_loopCutPreview.empty() && g_meshes[g_selectedMesh].visible) {
+        auto& mesh = g_meshes[g_selectedMesh];
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+        glm::mat4 mvp = vp * model;
+
+        if (!g_selVAO) {
+            glGenVertexArrays(1, &g_selVAO);
+            glGenBuffers(1, &g_selVBO);
+        }
+        glBindVertexArray(g_selVAO);
+
+        std::vector<float> buf;
+
+        // Draw the preview cut lines (yellow)
+        for (int ei : g_loopCutPreview) {
+            if (ei < 0 || ei >= (int)mesh.edges.size()) continue;
+            int he = mesh.edges[ei].he;
+            int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+            int vb = mesh.hedges[he].vertex;
+            auto& pa = mesh.verts[va].pos;
+            auto& pb = mesh.verts[vb].pos;
+
+            // Draw cut lines perpendicular to this edge, across the adjacent faces
+            // For each cut, compute midpoints on this edge and the opposite edge
+            // For simplicity, just highlight the loop edges and draw cut tick marks
+            for (int c = 1; c <= g_loopCutCount; c++) {
+                float t = (float)c / (float)(g_loopCutCount + 1);
+                glm::vec3 midpoint = glm::mix(pa, pb, t);
+
+                // Find the faces adjacent to this edge and draw a line across each
+                int faces2[2] = { mesh.hedges[he].face, -1 };
+                if (mesh.hedges[he].twin >= 0)
+                    faces2[1] = mesh.hedges[mesh.hedges[he].twin].face;
+
+                for (int fi = 0; fi < 2; fi++) {
+                    if (faces2[fi] < 0) continue;
+                    // Find the opposite edge in this face
+                    int fhe = mesh.faces[faces2[fi]].edge;
+                    int cur = fhe;
+                    int count = 0;
+                    do { count++; cur = mesh.hedges[cur].next; } while (cur != fhe && count < 64);
+                    if (count != 4) continue;
+
+                    // Find which half-edge in this face corresponds to our edge
+                    cur = fhe;
+                    int sideIdx = 0;
+                    int matchHe = -1;
+                    do {
+                        int curSrc = mesh.hedges[mesh.hedges[cur].prev].vertex;
+                        int curDst = mesh.hedges[cur].vertex;
+                        if ((curSrc == va && curDst == vb) || (curSrc == vb && curDst == va)) {
+                            matchHe = cur;
+                            break;
+                        }
+                        cur = mesh.hedges[cur].next;
+                        sideIdx++;
+                    } while (cur != fhe);
+
+                    if (matchHe < 0) continue;
+
+                    // Opposite edge is 2 half-edges forward
+                    int oppHe = mesh.hedges[mesh.hedges[matchHe].next].next;
+                    int oppSrc = mesh.hedges[mesh.hedges[oppHe].prev].vertex;
+                    int oppDst = mesh.hedges[oppHe].vertex;
+
+                    // Corresponding point on opposite edge
+                    // Note: opposite edge goes in reverse direction relative to our edge
+                    glm::vec3 oppPoint = glm::mix(mesh.verts[oppDst].pos, mesh.verts[oppSrc].pos, t);
+
+                    buf.push_back(midpoint.x); buf.push_back(midpoint.y); buf.push_back(midpoint.z);
+                    buf.push_back(oppPoint.x); buf.push_back(oppPoint.y); buf.push_back(oppPoint.z);
+                }
+            }
+        }
+
+        if (!buf.empty()) {
+            glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+            glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+            glEnableVertexAttribArray(0);
+            g_wireShader.use();
+            g_wireShader.set_mat4("uMVP", mvp);
+            g_wireShader.set_vec3("uColor", {1.0f, 0.85f, 0.0f}); // yellow
+            glLineWidth(2.5f);
+            glDisable(GL_DEPTH_TEST);
+            glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
+            glEnable(GL_DEPTH_TEST);
+            glLineWidth(1.0f);
+        }
+
+        glBindVertexArray(0);
+    }
+
+    // Draw slide highlight (yellow edges connecting slide vertices)
+    if (g_loopSlideMode && !g_meshes.empty() && !g_slideData.empty()) {
+        auto& mesh = g_meshes[g_selectedMesh];
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+        glm::mat4 mvp = vp * model;
+
+        if (!g_selVAO) {
+            glGenVertexArrays(1, &g_selVAO);
+            glGenBuffers(1, &g_selVBO);
+        }
+        glBindVertexArray(g_selVAO);
+
+        // Collect positions of all slide vertices and draw edges between consecutive ones
+        // Group by cut index: for numCuts cuts, slideData has edges*numCuts entries
+        // slideData is ordered: edge0_cut0, edge0_cut1, ..., edge1_cut0, edge1_cut1, ...
+        int numEdges = g_slideData.size() / g_loopCutCount;
+        std::vector<float> buf;
+
+        for (int c = 0; c < g_loopCutCount; c++) {
+            for (int e = 0; e < numEdges; e++) {
+                int idx0 = e * g_loopCutCount + c;
+                int idx1 = ((e + 1) % numEdges) * g_loopCutCount + c;
+                if (idx0 >= (int)g_slideData.size() || idx1 >= (int)g_slideData.size()) continue;
+                auto& v0 = mesh.verts[g_slideData[idx0].vertIdx].pos;
+                auto& v1 = mesh.verts[g_slideData[idx1].vertIdx].pos;
+                buf.push_back(v0.x); buf.push_back(v0.y); buf.push_back(v0.z);
+                buf.push_back(v1.x); buf.push_back(v1.y); buf.push_back(v1.z);
+            }
+        }
+
+        if (!buf.empty()) {
+            glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+            glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+            glEnableVertexAttribArray(0);
+            g_wireShader.use();
+            g_wireShader.set_mat4("uMVP", mvp);
+            g_wireShader.set_vec3("uColor", {1.0f, 0.85f, 0.0f}); // yellow
+            glLineWidth(2.5f);
+            glDisable(GL_DEPTH_TEST);
+            glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
+            glEnable(GL_DEPTH_TEST);
+            glLineWidth(1.0f);
+        }
+
+        glBindVertexArray(0);
+    }
+
     // Draw axis indicator during transform (all modes)
     if (!g_meshes.empty() && g_transformMode != 0 && g_grab_axis >= 0) {
         auto& mesh = g_meshes[g_selectedMesh];
@@ -1639,10 +2039,111 @@ int main()
         if (ImGui::BeginPopup("##DeleteMesh")) {
             ImGui::Text("Delete \"%s\"?", g_meshes[g_selectedMesh].name.c_str());
             if (ImGui::MenuItem("Delete")) {
+                push_undo();
                 g_meshes.erase(g_meshes.begin() + g_selectedMesh);
                 g_objectSelected = false;
                 if (g_selectedMesh >= (int)g_meshes.size())
                     g_selectedMesh = std::max(0, (int)g_meshes.size() - 1);
+            }
+            ImGui::EndPopup();
+        }
+
+        // Delete menu (X key in edit modes)
+        if (g_openDeleteMenu) {
+            ImGui::OpenPopup("##DeleteMenu");
+            g_openDeleteMenu = false;
+        }
+        if (ImGui::BeginPopup("##DeleteMenu")) {
+            ImGui::TextUnformatted("Delete");
+            ImGui::Separator();
+            if (ImGui::MenuItem("Vertices")) {
+                if (!g_meshes.empty()) {
+                    push_undo();
+                    auto& mesh = g_meshes[g_selectedMesh];
+                    // Select vertices from current selection, then delete
+                    if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                        for (auto& e : mesh.edges) {
+                            if (!e.selected) continue;
+                            int he = e.he;
+                            mesh.verts[mesh.hedges[mesh.hedges[he].prev].vertex].selected = true;
+                            mesh.verts[mesh.hedges[he].vertex].selected = true;
+                        }
+                    } else if (g_uiState.selectMode == rf::SelectMode::Face) {
+                        for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                            if (!mesh.faces[fi].selected) continue;
+                            int start = mesh.faces[fi].edge;
+                            int cur = start;
+                            do {
+                                mesh.verts[mesh.hedges[cur].vertex].selected = true;
+                                cur = mesh.hedges[cur].next;
+                            } while (cur != start);
+                        }
+                    }
+                    g_uiState.selectMode = rf::SelectMode::Vertex;
+                    mesh.delete_selected();
+                }
+            }
+            if (ImGui::MenuItem("Edges")) {
+                if (!g_meshes.empty()) {
+                    push_undo();
+                    auto& mesh = g_meshes[g_selectedMesh];
+                    if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                        for (auto& e : mesh.edges) {
+                            int he = e.he;
+                            int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                            int vb = mesh.hedges[he].vertex;
+                            if (mesh.verts[va].selected && mesh.verts[vb].selected)
+                                e.selected = true;
+                        }
+                    } else if (g_uiState.selectMode == rf::SelectMode::Face) {
+                        for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                            if (!mesh.faces[fi].selected) continue;
+                            int start = mesh.faces[fi].edge;
+                            int cur = start;
+                            do {
+                                for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                                    if (mesh.edges[ei].he == cur ||
+                                        mesh.hedges[mesh.edges[ei].he].twin == cur)
+                                        mesh.edges[ei].selected = true;
+                                }
+                                cur = mesh.hedges[cur].next;
+                            } while (cur != start);
+                        }
+                    }
+                    g_uiState.selectMode = rf::SelectMode::Edge;
+                    mesh.delete_selected();
+                }
+            }
+            if (ImGui::MenuItem("Faces")) {
+                if (!g_meshes.empty()) {
+                    push_undo();
+                    auto& mesh = g_meshes[g_selectedMesh];
+                    if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                        for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                            int start = mesh.faces[fi].edge;
+                            int cur = start;
+                            bool allSel = true;
+                            do {
+                                if (!mesh.verts[mesh.hedges[cur].vertex].selected)
+                                    allSel = false;
+                                cur = mesh.hedges[cur].next;
+                            } while (cur != start && allSel);
+                            if (allSel) mesh.faces[fi].selected = true;
+                        }
+                    } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                        for (auto& e : mesh.edges) {
+                            if (!e.selected) continue;
+                            int he = e.he;
+                            if (mesh.hedges[he].face >= 0)
+                                mesh.faces[mesh.hedges[he].face].selected = true;
+                            int tw = mesh.hedges[he].twin;
+                            if (tw >= 0 && mesh.hedges[tw].face >= 0)
+                                mesh.faces[mesh.hedges[tw].face].selected = true;
+                        }
+                    }
+                    g_uiState.selectMode = rf::SelectMode::Face;
+                    mesh.delete_selected();
+                }
             }
             ImGui::EndPopup();
         }

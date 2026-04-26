@@ -712,6 +712,329 @@ void Mesh::extrude_selected_faces()
 }
 
 // ---------------------------------------------------------------------------
+// Edge loop finding (for loop cut)
+// ---------------------------------------------------------------------------
+std::vector<int> Mesh::find_edge_loop(int edgeIdx) const
+{
+    // Returns list of edge indices that form a loop perpendicular to the given edge.
+    // Walks across quad faces: from an edge, find the opposite edge in the face, cross twin, repeat.
+    std::vector<int> loop;
+    if (edgeIdx < 0 || edgeIdx >= (int)edges.size()) return loop;
+
+    // Helper: given a half-edge entering a face, find the "opposite" half-edge
+    // For quads (4 sides): skip 2 half-edges forward from the given he
+    // For non-quads: stop (can't do clean loop cut)
+    auto get_opposite_he = [&](int he) -> int {
+        int faceIdx = hedges[he].face;
+        if (faceIdx < 0) return -1;
+        // Count face sides
+        int count = 0;
+        int cur = faces[faceIdx].edge;
+        int start = cur;
+        do { count++; cur = hedges[cur].next; } while (cur != start && count < 64);
+        if (count != 4) return -1; // only works for quads
+        // Opposite = 2 edges forward
+        return hedges[hedges[he].next].next;
+    };
+
+    // Walk in one direction from the starting edge
+    auto walk = [&](int startHe, std::vector<int>& result) {
+        int he = startHe;
+        std::set<int> visited;
+        while (true) {
+            int oppHe = get_opposite_he(he);
+            if (oppHe < 0) break;
+            // Find which edge this opposite half-edge belongs to
+            int oppEdge = -1;
+            for (int ei = 0; ei < (int)edges.size(); ei++) {
+                int eHe = edges[ei].he;
+                if (eHe == oppHe || (hedges[eHe].twin >= 0 && hedges[eHe].twin == oppHe)) {
+                    oppEdge = ei;
+                    break;
+                }
+                if (hedges[oppHe].twin >= 0 && hedges[oppHe].twin == eHe) {
+                    oppEdge = ei;
+                    break;
+                }
+            }
+            if (oppEdge < 0) break;
+            if (visited.count(oppEdge)) break; // completed loop
+            if (oppEdge == edgeIdx) break; // back to start
+            visited.insert(oppEdge);
+            result.push_back(oppEdge);
+            // Cross to twin and continue
+            int twin = hedges[oppHe].twin;
+            if (twin < 0) break;
+            he = twin;
+        }
+    };
+
+    loop.push_back(edgeIdx);
+
+    // Walk from one half-edge direction
+    int he0 = edges[edgeIdx].he;
+    int twin0 = hedges[he0].twin;
+
+    std::vector<int> fwd, bwd;
+    walk(he0, fwd);
+    if (twin0 >= 0)
+        walk(twin0, bwd);
+
+    // Combine: reverse bwd + start + fwd
+    std::reverse(bwd.begin(), bwd.end());
+    std::vector<int> combined;
+    for (int e : bwd) combined.push_back(e);
+    combined.push_back(edgeIdx);
+    for (int e : fwd) combined.push_back(e);
+
+    // Check if it actually loops (fwd reached back to start or bwd)
+    // Remove duplicates
+    std::set<int> seen;
+    loop.clear();
+    for (int e : combined) {
+        if (seen.insert(e).second) loop.push_back(e);
+    }
+
+    return loop;
+}
+
+// ---------------------------------------------------------------------------
+// Loop cut
+// ---------------------------------------------------------------------------
+std::vector<Mesh::SlideVert> Mesh::loop_cut(int edgeIdx, int numCuts)
+{
+    auto loopEdges = find_edge_loop(edgeIdx);
+    std::vector<SlideVert> slideResult;
+    if (loopEdges.empty() || numCuts < 1) return slideResult;
+
+    // Map half-edge index -> edge index
+    std::map<int, int> heToEdge;
+    for (int ei = 0; ei < (int)edges.size(); ei++) {
+        heToEdge[edges[ei].he] = ei;
+        int tw = hedges[edges[ei].he].twin;
+        if (tw >= 0) heToEdge[tw] = ei;
+    }
+    std::set<int> loopSet(loopEdges.begin(), loopEdges.end());
+
+    // Orient all edges consistently (src = side A, dst = side B)
+    struct EdgeDir { int src, dst; };
+    std::map<int, EdgeDir> edgeDir;
+
+    // First edge: pick canonical direction
+    {
+        int he = edges[loopEdges[0]].he;
+        edgeDir[loopEdges[0]] = { hedges[hedges[he].prev].vertex, hedges[he].vertex };
+    }
+
+    // Walk the loop and orient each subsequent edge using shared face connectivity
+    for (int li = 0; li < (int)loopEdges.size(); li++) {
+        int eiCur = loopEdges[li];
+        int eiNext = loopEdges[(li + 1) % loopEdges.size()];
+        if (edgeDir.count(eiNext)) continue;
+
+        int heCur = edges[eiCur].he;
+        int heNext = edges[eiNext].he;
+        int twinCur = hedges[heCur].twin;
+        int twinNext = hedges[heNext].twin;
+
+        bool found = false;
+        for (int hc : {heCur, twinCur}) {
+            if (hc < 0 || found) continue;
+            for (int hn : {heNext, twinNext}) {
+                if (hn < 0 || found) continue;
+                if (hedges[hc].face >= 0 && hedges[hc].face == hedges[hn].face) {
+                    int srcC = hedges[hedges[hc].prev].vertex;
+                    int srcN = hedges[hedges[hn].prev].vertex;
+                    int dstN = hedges[hn].vertex;
+                    // In quad: srcC connects to dstN (same side), dstC connects to srcN (same side)
+                    auto& dc = edgeDir[eiCur];
+                    if (dc.src == srcC)
+                        edgeDir[eiNext] = { dstN, srcN };
+                    else
+                        edgeDir[eiNext] = { srcN, dstN };
+                    found = true;
+                }
+            }
+        }
+        if (!found) {
+            int he = edges[eiNext].he;
+            edgeDir[eiNext] = { hedges[hedges[he].prev].vertex, hedges[he].vertex };
+        }
+    }
+
+    // Create new vertices on each loop edge using consistent direction
+    std::map<int, std::vector<int>> edgeNewVerts;
+
+    for (int ei : loopEdges) {
+        auto& d = edgeDir[ei];
+        std::vector<int> nv;
+        for (int c = 1; c <= numCuts; c++) {
+            float t = (float)c / (float)(numCuts + 1);
+            MeshVertex mv;
+            mv.pos = glm::mix(verts[d.src].pos, verts[d.dst].pos, t);
+            mv.uv = glm::mix(verts[d.src].uv, verts[d.dst].uv, t);
+            mv.edge = -1;
+            mv.selected = false;
+            int idx = (int)verts.size();
+            verts.push_back(mv);
+            nv.push_back(idx);
+            slideResult.push_back({idx, verts[d.src].pos, verts[d.dst].pos, t});
+        }
+        edgeNewVerts[ei] = nv;
+    }
+
+    // Get new verts ordered from vertex 'from' toward vertex 'to'
+    auto getOrdered = [&](int ei, int from, int to) -> std::vector<int> {
+        auto& nv = edgeNewVerts[ei];
+        auto& d = edgeDir[ei];
+        if (d.src == from) return nv;
+        return std::vector<int>(nv.rbegin(), nv.rend());
+    };
+
+    // Collect all face vertex loops (for non-cut faces to keep as-is)
+    struct FLoop { std::vector<int> v; };
+    std::vector<FLoop> newFaces;
+
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        // Walk this face's half-edges
+        std::vector<int> faceHEs;
+        int start = faces[fi].edge;
+        int cur = start;
+        do { faceHEs.push_back(cur); cur = hedges[cur].next; } while (cur != start);
+
+        if (faceHEs.size() != 4) {
+            // Non-quad: keep as-is
+            FLoop fl;
+            for (int he : faceHEs) fl.v.push_back(hedges[he].vertex);
+            newFaces.push_back(fl);
+            continue;
+        }
+
+        // Find which half-edges are cut edges
+        int cutHE0 = -1, cutHE1 = -1;
+        for (int i = 0; i < 4; i++) {
+            auto it = heToEdge.find(faceHEs[i]);
+            if (it != heToEdge.end() && loopSet.count(it->second)) {
+                if (cutHE0 < 0) cutHE0 = i;
+                else cutHE1 = i;
+            }
+        }
+
+        if (cutHE0 < 0 || cutHE1 < 0) {
+            // Not a cut face: keep as-is
+            FLoop fl;
+            for (int he : faceHEs) fl.v.push_back(hedges[he].vertex);
+            newFaces.push_back(fl);
+            continue;
+        }
+
+        // We have a quad with 2 cut half-edges at positions cutHE0 and cutHE1
+        // Each half-edge goes src→dst. Get actual vertex indices.
+        int heA = faceHEs[cutHE0];
+        int srcA = hedges[hedges[heA].prev].vertex;
+        int dstA = hedges[heA].vertex;
+        int eiA = heToEdge[heA];
+
+        int heB = faceHEs[cutHE1];
+        int srcB = hedges[hedges[heB].prev].vertex;
+        int dstB = hedges[heB].vertex;
+        int eiB = heToEdge[heB];
+
+        // Rail A: srcA → new verts → dstA
+        std::vector<int> railA;
+        railA.push_back(srcA);
+        for (int v : getOrdered(eiA, srcA, dstA)) railA.push_back(v);
+        railA.push_back(dstA);
+
+        // Rail B: srcB → new verts → dstB
+        // But we need rail B to go PARALLEL to rail A.
+        // In the face loop, the two cut edges go in opposite directions.
+        // dstA connects to srcB (via non-cut edges), so rail B reversed is parallel to rail A.
+        // Rail B reversed: dstB → reversed new verts → srcB
+        std::vector<int> railB;
+        railB.push_back(dstB);
+        for (int v : getOrdered(eiB, dstB, srcB)) railB.push_back(v);
+        railB.push_back(srcB);
+
+        // Generate strip quads
+        for (int i = 0; i <= numCuts; i++) {
+            FLoop q;
+            q.v = { railA[i], railA[i+1], railB[i+1], railB[i] };
+            newFaces.push_back(q);
+        }
+    }
+
+    // Rebuild topology from face loops
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : newFaces) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+        Face f;
+        f.edge = base;
+        f.selected = false;
+        f.normal = {0, 0, 0};
+        faces.push_back(f);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    // Build edge list
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+    return slideResult;
+}
+
+// ---------------------------------------------------------------------------
+// Slide vertices along their edge rails
+// ---------------------------------------------------------------------------
+void Mesh::slide_verts(const std::vector<SlideVert>& slideData, float offset)
+{
+    for (auto& sv : slideData) {
+        if (sv.vertIdx < 0 || sv.vertIdx >= (int)verts.size()) continue;
+        float t = glm::clamp(sv.defaultT + offset, 0.001f, 0.999f);
+        verts[sv.vertIdx].pos = glm::mix(sv.posA, sv.posB, t);
+    }
+    recalc_normals();
+    rebuild_gpu();
+}
+
+// ---------------------------------------------------------------------------
 // Delete selected elements
 // ---------------------------------------------------------------------------
 void Mesh::delete_selected()
