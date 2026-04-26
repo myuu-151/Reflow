@@ -35,6 +35,12 @@ static std::vector<rf::Mesh> g_meshes;
 static int g_selectedMesh = 0;
 static bool g_objectSelected = false;
 
+// Camera animation
+static bool g_camAnimating = false;
+static glm::vec3 g_camAnimStartTarget, g_camAnimEndTarget;
+static float g_camAnimStartDist, g_camAnimEndDist;
+static float g_camAnimT = 0.0f;
+
 static rf::UIState g_uiState;
 static bool g_openNormalsMenu = false;
 static bool g_openDeleteConfirm = false;
@@ -1511,6 +1517,35 @@ int main()
                 center /= (float)mesh.verts.size();
                 g_camera.target = center + mesh.position;
             }
+        }
+        // Zoom to fit selected mesh on double-click (start animation)
+        if (g_uiState.pendingZoomSelected) {
+            g_uiState.pendingZoomSelected = false;
+            if (!g_meshes.empty()) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);
+                for (auto& v : mesh.verts) {
+                    mn = glm::min(mn, v.pos);
+                    mx = glm::max(mx, v.pos);
+                }
+                g_camAnimStartTarget = g_camera.target;
+                g_camAnimStartDist = g_camera.distance;
+                g_camAnimEndTarget = (mn + mx) * 0.5f + mesh.position;
+                g_camAnimEndDist = glm::length(mx - mn) * 2.5f * 0.5f;
+                g_camAnimT = 0.0f;
+                g_camAnimating = true;
+            }
+        }
+        // Animate camera slide
+        if (g_camAnimating) {
+            g_camAnimT += 0.04f;
+            if (g_camAnimT >= 1.0f) {
+                g_camAnimT = 1.0f;
+                g_camAnimating = false;
+            }
+            float t = g_camAnimT * g_camAnimT * (3.0f - 2.0f * g_camAnimT); // smoothstep
+            g_camera.target = glm::mix(g_camAnimStartTarget, g_camAnimEndTarget, t);
+            g_camera.distance = glm::mix(g_camAnimStartDist, g_camAnimEndDist, t);
         }
 
         // Clear full window

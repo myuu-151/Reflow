@@ -577,6 +577,9 @@ void ui_objects_panel(UIState& state)
                 if (state.objectSelected) *state.objectSelected = true;
                 state.pendingFrameSelected = true;
             }
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                state.pendingZoomSelected = true;
+            }
             ImGui::PopStyleColor();
 
             ImGui::SameLine();

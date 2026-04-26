@@ -44,6 +44,7 @@ struct UIState {
     float uiScale = 2.5f;
     UIAction pendingAction = UIAction::None;
     bool pendingFrameSelected = false;
+    bool pendingZoomSelected = false;
     int pendingSelectMesh = -1;    // request to select mesh by index
 
     // Pointers to scene data (set by main)
