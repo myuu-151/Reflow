@@ -799,6 +799,79 @@ std::vector<int> Mesh::find_edge_loop(int edgeIdx) const
 }
 
 // ---------------------------------------------------------------------------
+// Edge ring (loop containing the edge, for selection)
+// ---------------------------------------------------------------------------
+std::vector<int> Mesh::find_edge_ring(int edgeIdx) const
+{
+    // Walks edges end-to-end through quad faces.
+    // From half-edge he (A→B), continuation at B = he.next.twin.next
+    std::vector<int> ring;
+    if (edgeIdx < 0 || edgeIdx >= (int)edges.size()) return ring;
+
+    // Map half-edge to edge index
+    std::map<int, int> heToEdge;
+    for (int ei = 0; ei < (int)edges.size(); ei++) {
+        heToEdge[edges[ei].he] = ei;
+        int tw = hedges[edges[ei].he].twin;
+        if (tw >= 0) heToEdge[tw] = ei;
+    }
+
+    // Walk in one direction from a half-edge
+    auto walk = [&](int he, std::vector<int>& result) {
+        std::set<int> visited;
+        visited.insert(edgeIdx);
+        while (true) {
+            // Continuation: he.next.twin.next
+            int next = hedges[he].next;
+            // Check the face is a quad
+            int f = hedges[he].face;
+            if (f < 0) break;
+            int count = 0;
+            int cur = faces[f].edge;
+            int s = cur;
+            do { count++; cur = hedges[cur].next; } while (cur != s && count < 64);
+            if (count != 4) break;
+
+            int twin = hedges[next].twin;
+            if (twin < 0) break;
+            int cont = hedges[twin].next;
+
+            auto it = heToEdge.find(cont);
+            if (it == heToEdge.end()) break;
+            int ei = it->second;
+            if (visited.count(ei)) break;
+            visited.insert(ei);
+            result.push_back(ei);
+            he = cont;
+        }
+    };
+
+    ring.push_back(edgeIdx);
+
+    int he0 = edges[edgeIdx].he;
+    int twin0 = hedges[he0].twin;
+
+    std::vector<int> fwd, bwd;
+    walk(he0, fwd);
+    if (twin0 >= 0)
+        walk(twin0, bwd);
+
+    std::reverse(bwd.begin(), bwd.end());
+    std::vector<int> combined;
+    for (int e : bwd) combined.push_back(e);
+    combined.push_back(edgeIdx);
+    for (int e : fwd) combined.push_back(e);
+
+    std::set<int> seen;
+    ring.clear();
+    for (int e : combined) {
+        if (seen.insert(e).second) ring.push_back(e);
+    }
+
+    return ring;
+}
+
+// ---------------------------------------------------------------------------
 // Loop cut
 // ---------------------------------------------------------------------------
 std::vector<Mesh::SlideVert> Mesh::loop_cut(int edgeIdx, int numCuts)

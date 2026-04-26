@@ -89,6 +89,25 @@ struct Mesh {
     void extrude_selected_faces();
     void delete_selected();
     void translate_selected(const glm::vec3& delta);
+
+    // Loop cut: find the edge loop crossing the given edge, return list of edge indices
+    std::vector<int> find_edge_loop(int edgeIdx) const;
+
+    // Selection: find the edge loop containing the given edge (follows edges end-to-end through quads)
+    std::vector<int> find_edge_ring(int edgeIdx) const;
+
+    // Slide data: for each new vertex, store endpoints and default t
+    struct SlideVert {
+        int vertIdx;
+        glm::vec3 posA, posB; // edge endpoints
+        float defaultT;       // default position along edge (e.g. 0.33, 0.5, 0.67)
+    };
+
+    // Perform loop cut, returns slide data for the new vertices
+    std::vector<SlideVert> loop_cut(int edgeIdx, int numCuts = 1);
+
+    // Slide: offset shifts all cuts along their edges (-1 to 1 range)
+    void slide_verts(const std::vector<SlideVert>& slideData, float offset);
     std::vector<int> get_selected_vert_indices() const;
     glm::vec3 get_selection_center() const;
     glm::vec3 get_selected_face_normal() const;

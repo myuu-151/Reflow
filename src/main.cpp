@@ -500,6 +500,8 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
             bool shift = (mods & GLFW_MOD_SHIFT) != 0;
             if (!shift) mesh.deselect_all();
 
+            bool alt = (mods & GLFW_MOD_ALT) != 0;
+
             switch (g_uiState.selectMode) {
                 case rf::SelectMode::Vertex: {
                     int vi = mesh.pick_vertex(rayO, rayD);
@@ -508,7 +510,15 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
                 }
                 case rf::SelectMode::Edge: {
                     int ei = mesh.pick_edge(rayO, rayD);
-                    if (ei >= 0) mesh.edges[ei].selected = !mesh.edges[ei].selected || !shift;
+                    if (ei >= 0) {
+                        if (alt) {
+                            auto loop = mesh.find_edge_ring(ei);
+                            for (int le : loop)
+                                mesh.edges[le].selected = true;
+                        } else {
+                            mesh.edges[ei].selected = !mesh.edges[ei].selected || !shift;
+                        }
+                    }
                     break;
                 }
                 case rf::SelectMode::Face: {
@@ -761,14 +771,41 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             }
             break;
 
-        // Extrude (E) — face mode only
+        // Extrude (E)
         case GLFW_KEY_E:
-            if (g_uiState.selectMode == rf::SelectMode::Face && !g_meshes.empty()) {
+            if ((g_uiState.selectMode == rf::SelectMode::Face ||
+                 g_uiState.selectMode == rf::SelectMode::Vertex ||
+                 g_uiState.selectMode == rf::SelectMode::Edge) && !g_meshes.empty()) {
                 auto& mesh = g_meshes[g_selectedMesh];
+                // Auto-select faces from vertex/edge selection
+                if (g_uiState.selectMode == rf::SelectMode::Vertex ||
+                    g_uiState.selectMode == rf::SelectMode::Edge) {
+                    // Mark verts from edge selection
+                    if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                        for (auto& e : mesh.edges) {
+                            if (!e.selected) continue;
+                            int he = e.he;
+                            mesh.verts[mesh.hedges[mesh.hedges[he].prev].vertex].selected = true;
+                            mesh.verts[mesh.hedges[he].vertex].selected = true;
+                        }
+                    }
+                    // Select faces where all verts are selected
+                    for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                        int start = mesh.faces[fi].edge;
+                        int cur = start;
+                        bool allSel = true;
+                        do {
+                            if (!mesh.verts[mesh.hedges[cur].vertex].selected)
+                                allSel = false;
+                            cur = mesh.hedges[cur].next;
+                        } while (cur != start && allSel);
+                        if (allSel) mesh.faces[fi].selected = true;
+                    }
+                }
                 if (mesh.count_selected_faces() > 0) {
                     push_undo();
                     mesh.extrude_selected_faces();
-                    // Auto-enter grab mode along face normal after extrude
+                    g_uiState.selectMode = rf::SelectMode::Face;
                     start_transform(1);
                 }
             }
@@ -1402,6 +1439,47 @@ static void render_viewport()
                 g_wireShader.set_vec3("uColor", {0.1f, 0.1f, 0.1f});
                 glPointSize(5.0f);
                 glDrawArrays(GL_POINTS, 0, (int)buf.size() / 3);
+            }
+
+            // Translucent fill on front-facing faces where all verts are selected
+            buf.clear();
+            for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                if (!faceFront[fi]) continue;
+                std::vector<int> fv;
+                int start = mesh.faces[fi].edge;
+                int cur = start;
+                bool allSel = true;
+                do {
+                    int vi = mesh.hedges[cur].vertex;
+                    fv.push_back(vi);
+                    if (!mesh.verts[vi].selected) allSel = false;
+                    cur = mesh.hedges[cur].next;
+                } while (cur != start && (int)fv.size() < 64);
+                if (!allSel) continue;
+                for (int i = 1; i + 1 < (int)fv.size(); i++) {
+                    int tri[3] = {fv[0], fv[i], fv[i+1]};
+                    for (int k = 0; k < 3; k++) {
+                        auto& p = mesh.verts[tri[k]].pos;
+                        buf.push_back(p.x); buf.push_back(p.y); buf.push_back(p.z);
+                    }
+                }
+            }
+            if (!buf.empty()) {
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+                g_wireShader.set_vec3("uColor", kSelectColor);
+                glEnable(GL_BLEND);
+                glBlendColor(0, 0, 0, 0.3f);
+                glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+                glDepthFunc(GL_LEQUAL);
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(-2.0f, -2.0f);
+                glDrawArrays(GL_TRIANGLES, 0, (int)buf.size() / 3);
+                glDisable(GL_POLYGON_OFFSET_FILL);
+                glDepthFunc(GL_LESS);
+                glDisable(GL_BLEND);
             }
         }
         else if (g_uiState.selectMode == rf::SelectMode::Edge) {
