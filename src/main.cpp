@@ -19,6 +19,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <commdlg.h>
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
 #endif
 
 // ---------------------------------------------------------------------------
@@ -1470,16 +1472,26 @@ int main()
     glfwMakeContextCurrent(win);
     glfwSwapInterval(1);
 
-    // Set window icon (title bar + taskbar) — multiple sizes for crisp scaling
+    // Set window icon (title bar + taskbar)
     {
 #ifdef _WIN32
-        char exePath[MAX_PATH];
-        GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-        std::string dir(exePath);
-        dir = dir.substr(0, dir.find_last_of("\\/") + 1);
+        HWND hwnd = glfwGetWin32Window(win);
+        HINSTANCE hInst = GetModuleHandle(nullptr);
+        HICON hIconBig = (HICON)LoadImageA(hInst, MAKEINTRESOURCEA(1),
+            IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+        HICON hIconSmall = (HICON)LoadImageA(hInst, MAKEINTRESOURCEA(1),
+            IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+        if (hIconBig) {
+            SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconBig);
+            SetClassLongPtrA(hwnd, GCLP_HICON, (LONG_PTR)hIconBig);
+        }
+        if (hIconSmall) {
+            SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
+            SetClassLongPtrA(hwnd, GCLP_HICONSM, (LONG_PTR)hIconSmall);
+        }
 #else
+        char exePath[1] = {};
         std::string dir = "";
-#endif
         const char* iconFiles[] = {
             "res/reflow_icon_16.png",
             "res/reflow_icon_32.png",
@@ -1501,6 +1513,7 @@ int main()
             glfwSetWindowIcon(win, imgCount, imgs);
         for (int i = 0; i < 4; i++)
             if (pxData[i]) stbi_image_free(pxData[i]);
+#endif
     }
 
     glfwSetFramebufferSizeCallback(win, cb_resize);
