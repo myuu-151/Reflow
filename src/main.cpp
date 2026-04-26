@@ -88,6 +88,14 @@ static std::vector<int> g_grab_vertIdx;
 static float g_scale_start_dist = 1.0f; // for scale mode
 static float g_rotate_start_angle = 0.0f; // for rotate mode
 
+// Edge slide (GG)
+struct EdgeSlideVert {
+    int vertIdx;
+    glm::vec3 posA, posB; // the two rail endpoints
+    glm::vec3 origPos;
+};
+static std::vector<EdgeSlideVert> g_edgeSlideData;
+
 // Undo/Redo
 struct UndoState {
     std::vector<rf::Mesh> meshes;
@@ -393,12 +401,14 @@ static void cancel_transform()
     }
     g_transformMode = 0;
     g_grab_axis = -1;
+    g_edgeSlideData.clear();
 }
 
 static void confirm_transform()
 {
     g_transformMode = 0;
     g_grab_axis = -1;
+    g_edgeSlideData.clear();
 }
 
 static void start_transform(int mode)
@@ -628,8 +638,19 @@ static void cb_cursor(GLFWwindow* win, double x, double y)
     }
 
     // Slide mode: mouse Y controls slide offset
-    if (g_loopSlideMode && !g_meshes.empty()) {
-        g_slideOffset = (float)(y - g_slideStartY) / 150.0f;
+    if (g_loopSlideMode && !g_meshes.empty() && !g_slideData.empty()) {
+        // Determine if positive offset = screen-up by projecting the slide direction
+        auto& mesh = g_meshes[g_selectedMesh];
+        auto& sv0 = g_slideData[0];
+        glm::vec3 slideDir = sv0.posB - sv0.posA;
+        glm::mat4 mvp = g_projMat * g_viewMat * glm::translate(glm::mat4(1.0f), mesh.position);
+        glm::vec4 pA = mvp * glm::vec4(sv0.posA, 1.0f);
+        glm::vec4 pB = mvp * glm::vec4(sv0.posB, 1.0f);
+        float screenYA = pA.y / pA.w;
+        float screenYB = pB.y / pB.w;
+        float sign = (screenYB >= screenYA) ? 1.0f : -1.0f;
+
+        g_slideOffset = sign * (float)(g_slideStartY - y) / 150.0f;
         g_slideOffset = glm::clamp(g_slideOffset, -0.95f, 0.95f);
         g_meshes[g_selectedMesh].slide_verts(g_slideData, g_slideOffset);
     }
@@ -673,6 +694,7 @@ static void cb_scroll(GLFWwindow*, double, double dy)
         if (g_loopCutCount > 50) g_loopCutCount = 50;
         return;
     }
+    if (g_loopSlideMode) return;
     g_camera.zoom((float)dy);
 }
 
@@ -720,8 +742,56 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             case GLFW_KEY_Z: g_grab_axis = (g_grab_axis == 2) ? -1 : 2; return;
             case GLFW_KEY_ESCAPE: cancel_transform(); return;
             case GLFW_KEY_ENTER: confirm_transform(); return;
-            // G during grab = reset to free (double-tap G)
-            case GLFW_KEY_G: if (g_transformMode == 1) { g_grab_axis = -1; } return;
+            // G during grab = edge slide (GG) in edge mode, else reset to free
+            case GLFW_KEY_G:
+                if (g_transformMode == 1 && g_uiState.selectMode == rf::SelectMode::Edge && !g_meshes.empty()) {
+                    // Build edge slide rails
+                    auto& mesh = g_meshes[g_selectedMesh];
+                    std::set<int> selVertSet(g_grab_vertIdx.begin(), g_grab_vertIdx.end());
+                    std::set<int> selEdgeSet;
+                    for (int ei = 0; ei < (int)mesh.edges.size(); ei++)
+                        if (mesh.edges[ei].selected) selEdgeSet.insert(ei);
+
+                    g_edgeSlideData.clear();
+                    for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
+                        int vi = g_grab_vertIdx[i];
+                        // Find non-selected edges connected to this vertex
+                        std::vector<glm::vec3> rails;
+                        for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                            if (selEdgeSet.count(ei)) continue;
+                            int he = mesh.edges[ei].he;
+                            int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                            int vb = mesh.hedges[he].vertex;
+                            if (va == vi) rails.push_back(mesh.verts[vb].pos);
+                            else if (vb == vi) rails.push_back(mesh.verts[va].pos);
+                        }
+                        // Remove duplicates and pick the best two rails
+                        // We want exactly 2 rails (one on each side)
+                        EdgeSlideVert sv;
+                        sv.vertIdx = vi;
+                        sv.origPos = g_grab_origPos[i];
+                        if (rails.size() >= 2) {
+                            sv.posA = rails[0];
+                            sv.posB = rails[1];
+                        } else if (rails.size() == 1) {
+                            sv.posA = rails[0];
+                            sv.posB = g_grab_origPos[i] * 2.0f - rails[0]; // mirror
+                        } else {
+                            sv.posA = g_grab_origPos[i];
+                            sv.posB = g_grab_origPos[i];
+                        }
+                        g_edgeSlideData.push_back(sv);
+                    }
+                    g_transformMode = 4; // edge slide
+                    // Reset mouse start
+                    double mx2, my2;
+                    glfwGetCursorPos(glfwGetCurrentContext(), &mx2, &my2);
+                    g_grab_startMX = mx2;
+                    g_grab_startMY = my2;
+                } else if (g_transformMode == 1) {
+                    g_grab_axis = -1;
+                }
+                return;
         }
         return;
     }
@@ -1125,6 +1195,17 @@ static void update_transform(GLFWwindow* win)
             glm::vec3 offset = g_grab_origPos[i] - center;
             glm::vec3 rotated = glm::vec3(rot * glm::vec4(offset, 1.0f));
             mesh.verts[g_grab_vertIdx[i]].pos = center + rotated;
+        }
+    } else if (g_transformMode == 4) {
+        // EDGE SLIDE: mouse Y controls slide factor (-1 to 1)
+        float factor = (float)(my - g_grab_startMY) / 150.0f;
+        factor = glm::clamp(factor, -1.0f, 1.0f);
+
+        for (auto& sv : g_edgeSlideData) {
+            if (factor >= 0.0f)
+                mesh.verts[sv.vertIdx].pos = glm::mix(sv.origPos, sv.posA, factor);
+            else
+                mesh.verts[sv.vertIdx].pos = glm::mix(sv.origPos, sv.posB, -factor);
         }
     }
 
@@ -1695,9 +1776,13 @@ static void render_viewport()
                     int oppSrc = mesh.hedges[mesh.hedges[oppHe].prev].vertex;
                     int oppDst = mesh.hedges[oppHe].vertex;
 
-                    // Corresponding point on opposite edge
-                    // Note: opposite edge goes in reverse direction relative to our edge
-                    glm::vec3 oppPoint = glm::mix(mesh.verts[oppDst].pos, mesh.verts[oppSrc].pos, t);
+                    // Check if matchHe goes va→vb or vb→va to determine opposite direction
+                    int matchSrc = mesh.hedges[mesh.hedges[matchHe].prev].vertex;
+                    glm::vec3 oppPoint;
+                    if (matchSrc == va)
+                        oppPoint = glm::mix(mesh.verts[oppDst].pos, mesh.verts[oppSrc].pos, t);
+                    else
+                        oppPoint = glm::mix(mesh.verts[oppSrc].pos, mesh.verts[oppDst].pos, t);
 
                     buf.push_back(midpoint.x); buf.push_back(midpoint.y); buf.push_back(midpoint.z);
                     buf.push_back(oppPoint.x); buf.push_back(oppPoint.y); buf.push_back(oppPoint.z);
