@@ -964,6 +964,17 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             }
             break;
 
+        // F = merge selected faces into one polygon
+        case GLFW_KEY_F:
+            if (g_uiState.selectMode == rf::SelectMode::Face && !g_meshes.empty()) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                if (mesh.count_selected_faces() >= 2) {
+                    push_undo();
+                    mesh.merge_selected_faces();
+                }
+            }
+            break;
+
         // X = delete menu
         case GLFW_KEY_X:
             if (!g_meshes.empty()) {

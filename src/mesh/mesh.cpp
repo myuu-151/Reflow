@@ -1457,6 +1457,130 @@ void Mesh::untriangulate_selected_faces()
 }
 
 // ---------------------------------------------------------------------------
+// Merge selected faces into one polygon
+// ---------------------------------------------------------------------------
+void Mesh::merge_selected_faces()
+{
+    // Find boundary half-edges of the selected face region:
+    // A boundary half-edge is one whose twin's face is NOT selected (or has no twin).
+    std::set<int> selFaces;
+    for (int fi = 0; fi < (int)faces.size(); fi++)
+        if (faces[fi].selected) selFaces.insert(fi);
+    if (selFaces.size() < 2) return;
+
+    // Collect boundary half-edges (in selected faces, whose opposite is not selected)
+    std::vector<int> boundaryHEs;
+    for (int fi : selFaces) {
+        int start = faces[fi].edge;
+        int cur = start;
+        do {
+            bool isBoundary = true;
+            int tw = hedges[cur].twin;
+            if (tw >= 0 && selFaces.count(hedges[tw].face))
+                isBoundary = false;
+            if (isBoundary)
+                boundaryHEs.push_back(cur);
+            cur = hedges[cur].next;
+        } while (cur != start);
+    }
+
+    if (boundaryHEs.empty()) return;
+
+    // Build a map: for each boundary he, destination vertex -> he index
+    // so we can chain them: the next boundary he starts where the previous one ends
+    std::map<int, int> srcToHE; // source vertex -> boundary he starting there
+    for (int he : boundaryHEs) {
+        int src = hedges[hedges[he].prev].vertex;
+        srcToHE[src] = he;
+    }
+
+    // Walk the boundary loop starting from the first boundary he
+    std::vector<int> mergedLoop;
+    int startHE = boundaryHEs[0];
+    int curHE = startHE;
+    std::set<int> visited;
+    do {
+        int dst = hedges[curHE].vertex;
+        mergedLoop.push_back(dst);
+        visited.insert(curHE);
+        // Find next boundary he starting from dst
+        auto it = srcToHE.find(dst);
+        if (it == srcToHE.end()) break;
+        curHE = it->second;
+    } while (curHE != startHE && !visited.count(curHE) && (int)mergedLoop.size() < 1000);
+
+    if ((int)mergedLoop.size() < 3) return;
+
+    // Rebuild: keep unselected faces, replace selected with merged polygon
+    struct FLoop { std::vector<int> v; bool sel; };
+    std::vector<FLoop> newFaces;
+
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        if (selFaces.count(fi)) continue;
+        std::vector<int> fv;
+        int start = faces[fi].edge;
+        int cur = start;
+        do { fv.push_back(hedges[cur].vertex); cur = hedges[cur].next; }
+        while (cur != start && (int)fv.size() < 64);
+        newFaces.push_back({fv, false});
+    }
+    newFaces.push_back({mergedLoop, true});
+
+    // Rebuild topology
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : newFaces) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+        Face f;
+        f.edge = base;
+        f.selected = fl.sel;
+        f.normal = {0, 0, 0};
+        faces.push_back(f);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    std::vector<bool> visited2(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited2[i]) continue;
+        visited2[i] = true;
+        if (hedges[i].twin >= 0) visited2[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+}
+
+// ---------------------------------------------------------------------------
 // Project save
 // ---------------------------------------------------------------------------
 bool save_project(const std::string& path, const std::vector<Mesh>& meshes, const UIState* ui)
