@@ -63,8 +63,8 @@ static GLuint g_selTex[4] = {}; // Object, Vertex, Edge, Face
 static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
 
 // Properties panel tab
-static int g_propTab = 0; // 0=Object, 1=Material
-static GLuint g_propTabTex[2] = {}; // Object, Material icons
+static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers
+static GLuint g_propTabTex[3] = {}; // Object, Material, Modifiers icons
 
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
 static GLuint load_texture(const char* path)
@@ -177,8 +177,9 @@ void ui_init(GLFWwindow* win)
     const char* propTabFiles[] = {
         "res/icon_object_prop.png",
         "res/icon_material.png",
+        "res/icon_wrench.png",
     };
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         std::string path = exe_relative(propTabFiles[i]);
         g_propTabTex[i] = load_texture(path.c_str());
     }
@@ -512,14 +513,56 @@ void ui_objects_panel(UIState& state)
     static int s_sphereSegments = 16;
     static bool s_showSphereParams = false;
     static int s_sphereIdx = -1;
+    // Helper lambdas for primitive icons in popup
+    auto drawCubeIcon = [&](ImVec2 pos, float sz) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float p = s(2);
+        float x = pos.x + p, y = pos.y + p;
+        float isz = sz - p * 2;
+        float off = isz * 0.22f;
+        dl->AddRect({x, y + off}, {x + isz - off, y + isz}, IM_COL32(200, 200, 205, 255), 0, 0, 1.2f);
+        dl->AddRect({x + off, y}, {x + isz, y + isz - off}, IM_COL32(200, 200, 205, 255), 0, 0, 1.0f);
+        dl->AddLine({x, y + off}, {x + off, y}, IM_COL32(200, 200, 205, 255), 1.0f);
+        dl->AddLine({x + isz - off, y + off}, {x + isz, y}, IM_COL32(200, 200, 205, 255), 1.0f);
+        dl->AddLine({x + isz - off, y + isz}, {x + isz, y + isz - off}, IM_COL32(200, 200, 205, 255), 1.0f);
+    };
+    auto drawSphereIcon = [&](ImVec2 pos, float sz) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float cx = pos.x + sz * 0.5f, cy = pos.y + sz * 0.5f;
+        float r = sz * 0.38f;
+        dl->AddCircle({cx, cy}, r, IM_COL32(200, 200, 205, 255), 24, 1.2f);
+        // Horizontal ellipse
+        dl->AddEllipse({cx, cy}, {r, r * 0.35f}, IM_COL32(200, 200, 205, 130), 0, 20, 1.0f);
+        // Vertical ellipse
+        dl->AddEllipse({cx, cy}, {r * 0.35f, r}, IM_COL32(200, 200, 205, 130), 0, 20, 1.0f);
+    };
+    auto drawPlaneIcon = [&](ImVec2 pos, float sz) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float p = s(3);
+        float x = pos.x + p, y = pos.y + p;
+        float isz = sz - p * 2;
+        dl->AddRect({x, y}, {x + isz, y + isz}, IM_COL32(200, 200, 205, 255), 0, 0, 1.2f);
+    };
+
     if (ImGui::BeginPopup("##AddPrimitive")) {
         if (state.meshes && state.selectedMesh && state.objectSelected) {
+            float iconSz = ImGui::GetTextLineHeightWithSpacing();
+            ImVec2 cpos;
+
+            // Cube
+            cpos = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + iconSz + s(4));
             if (ImGui::MenuItem("Cube")) {
                 auto cube = Mesh::create_cube();
                 state.meshes->push_back(std::move(cube));
                 *state.selectedMesh = (int)state.meshes->size() - 1;
                 *state.objectSelected = true;
             }
+            drawCubeIcon(cpos, iconSz);
+
+            // Sphere
+            cpos = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + iconSz + s(4));
             if (ImGui::MenuItem("Sphere")) {
                 s_sphereRings = 8;
                 s_sphereSegments = 16;
@@ -530,6 +573,18 @@ void ui_objects_panel(UIState& state)
                 *state.objectSelected = true;
                 s_showSphereParams = true;
             }
+            drawSphereIcon(cpos, iconSz);
+
+            // Plane
+            cpos = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + iconSz + s(4));
+            if (ImGui::MenuItem("Plane")) {
+                auto plane = Mesh::create_plane();
+                state.meshes->push_back(std::move(plane));
+                *state.selectedMesh = (int)state.meshes->size() - 1;
+                *state.objectSelected = true;
+            }
+            drawPlaneIcon(cpos, iconSz);
         }
         ImGui::EndPopup();
     }
@@ -624,8 +679,8 @@ void ui_properties_panel(UIState& state)
         float iconSz = s(18);
         float padObj = s(3);
         float padMat = s(1.75f);
-        const char* tabLabels[] = {"##PropObj", "##PropMat"};
-        for (int i = 0; i < 2; i++) {
+        const char* tabLabels[] = {"##PropObj", "##PropMat", "##PropMod"};
+        for (int i = 0; i < 3; i++) {
             if (i > 0) ImGui::SameLine(0, s(2));
 
             bool active = (g_propTab == i);
@@ -642,7 +697,7 @@ void ui_properties_panel(UIState& state)
                 g_propTab = i;
 
             if (g_propTabTex[i]) {
-                float p = (i == 0) ? padObj : padMat;
+                float p = (i == 0) ? padObj : (i == 1) ? padMat : s(2);
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 dl->AddImage((ImTextureID)(intptr_t)g_propTabTex[i],
                     {btnPos.x + p, btnPos.y + p},
@@ -684,7 +739,7 @@ void ui_properties_panel(UIState& state)
             ImGui::Text("No object selected");
             ImGui::PopStyleColor();
         }
-    } else {
+    } else if (g_propTab == 1) {
         // ---- Material tab ----
         ImGui::Checkbox("Follow Camera", &state.lightFollowCam);
         ImGui::Text("Light Direction");
@@ -1037,6 +1092,68 @@ void ui_properties_panel(UIState& state)
                     sStops[specSelStop].second = val;
                 }
             }
+        }
+    } else if (g_propTab == 2) {
+        // ---- Modifiers tab ----
+        bool hasMesh = state.meshes && !state.meshes->empty() && state.selectedMesh &&
+                       *state.selectedMesh >= 0 && *state.selectedMesh < (int)state.meshes->size();
+
+        if (hasMesh) {
+            auto& mesh = (*state.meshes)[*state.selectedMesh];
+
+            // Mesh name row with icon
+            {
+                float lineH = ImGui::GetTextLineHeightWithSpacing();
+                float iconSz = lineH * 0.9f;
+                float pad = s(2);
+
+                // Mesh icon (small cube outline)
+                ImVec2 iconPos = ImGui::GetCursorScreenPos();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                float ix = iconPos.x + pad;
+                float iy = iconPos.y + pad;
+                float isz = iconSz - pad * 2;
+                // Simple cube outline icon
+                dl->AddRect({ix, iy}, {ix + isz, iy + isz}, IM_COL32(180, 180, 185, 255), 0, 0, 1.5f);
+                dl->AddRect({ix + isz*0.2f, iy - isz*0.2f}, {ix + isz + isz*0.2f, iy + isz - isz*0.2f}, IM_COL32(180, 180, 185, 255), 0, 0, 1.0f);
+                dl->AddLine({ix, iy}, {ix + isz*0.2f, iy - isz*0.2f}, IM_COL32(180, 180, 185, 255), 1.0f);
+                dl->AddLine({ix + isz, iy}, {ix + isz + isz*0.2f, iy - isz*0.2f}, IM_COL32(180, 180, 185, 255), 1.0f);
+                dl->AddLine({ix + isz, iy + isz}, {ix + isz + isz*0.2f, iy + isz - isz*0.2f}, IM_COL32(180, 180, 185, 255), 1.0f);
+
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + iconSz + s(4));
+                ImGui::Text("%s", mesh.name.c_str());
+            }
+
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Add Modifier button
+            {
+                float avail = ImGui::GetContentRegionAvail().x;
+                float btnH = ImGui::GetFrameHeight();
+                ImGui::PushStyleColor(ImGuiCol_Button, {0.22f, 0.22f, 0.26f, 1.0f});
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.30f, 0.30f, 0.35f, 1.0f});
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.25f, 0.25f, 0.30f, 1.0f});
+                if (ImGui::Button("+ Add Modifier", {avail, btnH})) {
+                    ImGui::OpenPopup("##AddModifier");
+                }
+                ImGui::PopStyleColor(3);
+
+                if (ImGui::BeginPopup("##AddModifier")) {
+                    if (ImGui::MenuItem("Mirror")) {
+                        mesh.mirrorX = true;
+                        mesh.rebuild_gpu();
+                    }
+                    if (ImGui::MenuItem("Subdivision Surface")) {
+                        // placeholder
+                    }
+                    ImGui::EndPopup();
+                }
+            }
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
+            ImGui::Text("No object selected");
+            ImGui::PopStyleColor();
         }
     }
 

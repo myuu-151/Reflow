@@ -850,6 +850,28 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             case GLFW_KEY_Z: g_grab_axis = (g_grab_axis == 2) ? -1 : 2; return;
             case GLFW_KEY_ESCAPE: cancel_transform(); return;
             case GLFW_KEY_ENTER: confirm_transform(); return;
+            case GLFW_KEY_1:
+                if (g_transformMode == 5 && !g_meshes.empty()) {
+                    // Snap spherize to 100%
+                    auto& mesh = g_meshes[g_selectedMesh];
+                    glm::vec3 center = g_grab_center - mesh.position;
+                    float radius = 0.0f;
+                    for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
+                        float d = glm::length(g_grab_origPos[i] - center);
+                        if (d > radius) radius = d;
+                    }
+                    if (radius < 1e-6f) radius = 1e-6f;
+                    for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
+                        glm::vec3 offset = g_grab_origPos[i] - center;
+                        float len = glm::length(offset);
+                        if (len >= 1e-6f)
+                            mesh.verts[g_grab_vertIdx[i]].pos = center + glm::normalize(offset) * radius;
+                    }
+                    mesh.recalc_normals();
+                    mesh.rebuild_gpu();
+                    confirm_transform();
+                }
+                return;
             // G during grab = edge slide (GG) in edge mode, else reset to free
             case GLFW_KEY_G:
                 if (g_transformMode == 1 && g_uiState.selectMode == rf::SelectMode::Edge && !g_meshes.empty()) {
@@ -930,9 +952,13 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             }
             break;
 
-        // Scale (S)
+        // Scale (S) / Spherize (Alt+Shift+S)
         case GLFW_KEY_S:
-            start_transform(2);
+            if ((mods & GLFW_MOD_ALT) && (mods & GLFW_MOD_SHIFT)) {
+                start_transform(5); // spherize
+            } else {
+                start_transform(2);
+            }
             break;
 
         // Loop cut (Ctrl+R) or Rotate (R)
@@ -1406,6 +1432,30 @@ static void update_transform(GLFWwindow* win)
                 mesh.verts[sv.vertIdx].pos = glm::mix(sv.origPos, sv.posA, factor);
             else
                 mesh.verts[sv.vertIdx].pos = glm::mix(sv.origPos, sv.posB, -factor);
+        }
+    } else if (g_transformMode == 5) {
+        // SPHERIZE: mouse up = factor 0→1, lerp verts toward sphere surface
+        float factor = (float)(g_grab_startMY - my) / 200.0f;
+        factor = glm::clamp(factor, 0.0f, 1.0f);
+
+        // Compute radius as max distance from center
+        glm::vec3 center = g_grab_center - mesh.position;
+        float radius = 0.0f;
+        for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
+            float d = glm::length(g_grab_origPos[i] - center);
+            if (d > radius) radius = d;
+        }
+        if (radius < 1e-6f) radius = 1e-6f;
+
+        for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
+            glm::vec3 offset = g_grab_origPos[i] - center;
+            float len = glm::length(offset);
+            glm::vec3 spherePos;
+            if (len < 1e-6f)
+                spherePos = g_grab_origPos[i];
+            else
+                spherePos = center + glm::normalize(offset) * radius;
+            mesh.verts[g_grab_vertIdx[i]].pos = glm::mix(g_grab_origPos[i], spherePos, factor);
         }
     }
 
@@ -2605,6 +2655,63 @@ int main()
                 if (!g_meshes.empty()) {
                     g_meshes[g_selectedMesh].shadeSmooth = false;
                     g_meshes[g_selectedMesh].rebuild_gpu();
+                }
+            }
+            if (g_uiState.selectMode != rf::SelectMode::Object) {
+                ImGui::Separator();
+                if (ImGui::MenuItem("Subdivide")) {
+                    if (!g_meshes.empty()) {
+                        push_undo();
+                        auto& m = g_meshes[g_selectedMesh];
+                        // If nothing selected, select all faces
+                        bool anySel = false;
+                        for (auto& f : m.faces) if (f.selected) { anySel = true; break; }
+                        if (!anySel) {
+                            for (auto& v : m.verts) if (v.selected) { anySel = true; break; }
+                        }
+                        if (!anySel) {
+                            for (auto& e : m.edges) if (e.selected) { anySel = true; break; }
+                        }
+                        if (!anySel) {
+                            for (auto& f : m.faces) f.selected = true;
+                        } else if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                            // Select faces where all verts are selected
+                            for (int fi = 0; fi < (int)m.faces.size(); fi++) {
+                                int start = m.faces[fi].edge;
+                                int cur = start;
+                                bool all = true;
+                                do {
+                                    int src = m.hedges[m.hedges[cur].prev].vertex;
+                                    if (!m.verts[src].selected) { all = false; break; }
+                                    cur = m.hedges[cur].next;
+                                } while (cur != start);
+                                if (all) m.faces[fi].selected = true;
+                            }
+                        } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                            // Select faces where all edges are selected
+                            for (int fi = 0; fi < (int)m.faces.size(); fi++) {
+                                int start = m.faces[fi].edge;
+                                int cur = start;
+                                bool all = true;
+                                do {
+                                    // Find the edge for this half-edge
+                                    bool found = false;
+                                    for (int ei = 0; ei < (int)m.edges.size(); ei++) {
+                                        int he = m.edges[ei].he;
+                                        if (he == cur || m.hedges[he].twin == cur) {
+                                            if (!m.edges[ei].selected) all = false;
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) all = false;
+                                    cur = m.hedges[cur].next;
+                                } while (cur != start && all);
+                                if (all) m.faces[fi].selected = true;
+                            }
+                        }
+                        m.subdivide_selected_faces();
+                    }
                 }
             }
             ImGui::EndPopup();

@@ -1829,4 +1829,167 @@ bool load_project(const std::string& path, std::vector<Mesh>& meshes, UIState* u
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Subdivide selected faces
+// ---------------------------------------------------------------------------
+void Mesh::subdivide_selected_faces()
+{
+    // Collect all face loops
+    struct FLoop { std::vector<int> v; bool sel; };
+    std::vector<FLoop> oldFaces;
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        std::vector<int> fv;
+        int start = faces[fi].edge;
+        int cur = start;
+        do { fv.push_back(hedges[cur].vertex); cur = hedges[cur].next; }
+        while (cur != start && (int)fv.size() < 64);
+        oldFaces.push_back({fv, faces[fi].selected});
+    }
+
+    // For selected faces: create edge midpoints and face centers
+    // Edge midpoint map: sorted (v0,v1) -> new vertex index
+    std::map<std::pair<int,int>, int> edgeMidMap;
+
+    auto getEdgeMid = [&](int a, int b) -> int {
+        auto key = std::make_pair(std::min(a, b), std::max(a, b));
+        auto it = edgeMidMap.find(key);
+        if (it != edgeMidMap.end()) return it->second;
+        int idx = (int)verts.size();
+        MeshVertex mv;
+        mv.pos = (verts[a].pos + verts[b].pos) * 0.5f;
+        mv.uv = (verts[a].uv + verts[b].uv) * 0.5f;
+        mv.edge = -1;
+        mv.selected = false;
+        verts.push_back(mv);
+        edgeMidMap[key] = idx;
+        return idx;
+    };
+
+    // Build new face list
+    std::vector<FLoop> newFaces;
+    for (auto& fl : oldFaces) {
+        if (!fl.sel || (int)fl.v.size() < 3) {
+            newFaces.push_back(fl);
+            continue;
+        }
+
+        int n = (int)fl.v.size();
+
+        // Create face center vertex
+        glm::vec3 centerPos(0);
+        glm::vec2 centerUV(0);
+        for (int vi : fl.v) {
+            centerPos += verts[vi].pos;
+            centerUV += verts[vi].uv;
+        }
+        centerPos /= (float)n;
+        centerUV /= (float)n;
+        int centerIdx = (int)verts.size();
+        MeshVertex cv;
+        cv.pos = centerPos;
+        cv.uv = centerUV;
+        cv.edge = -1;
+        cv.selected = false;
+        verts.push_back(cv);
+
+        // Create edge midpoints
+        std::vector<int> mids(n);
+        for (int i = 0; i < n; i++)
+            mids[i] = getEdgeMid(fl.v[i], fl.v[(i + 1) % n]);
+
+        // Create n sub-faces: each is (corner, mid_after, center, mid_before)
+        for (int i = 0; i < n; i++) {
+            int corner = fl.v[i];
+            int midAfter = mids[i];
+            int midBefore = mids[(i + n - 1) % n];
+            newFaces.push_back({{corner, midAfter, centerIdx, midBefore}, true});
+        }
+    }
+
+    // Also subdivide edges of non-selected faces that share edges with selected faces
+    // The edge midpoints already exist, so re-split any non-selected face that references them
+    std::vector<FLoop> finalFaces;
+    for (auto& fl : newFaces) {
+        if (fl.sel) {
+            finalFaces.push_back(fl);
+            continue;
+        }
+
+        // Check if any edge of this face was split
+        int n = (int)fl.v.size();
+        std::vector<int> expanded;
+        bool hasSplit = false;
+        for (int i = 0; i < n; i++) {
+            expanded.push_back(fl.v[i]);
+            auto key = std::make_pair(std::min(fl.v[i], fl.v[(i+1)%n]),
+                                      std::max(fl.v[i], fl.v[(i+1)%n]));
+            auto it = edgeMidMap.find(key);
+            if (it != edgeMidMap.end()) {
+                expanded.push_back(it->second);
+                hasSplit = true;
+            }
+        }
+
+        if (!hasSplit) {
+            finalFaces.push_back(fl);
+        } else {
+            // The expanded polygon keeps the original selection state
+            finalFaces.push_back({expanded, fl.sel});
+        }
+    }
+
+    // Rebuild topology
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : finalFaces) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+        Face f;
+        f.edge = base;
+        f.selected = fl.sel;
+        f.normal = {0, 0, 0};
+        faces.push_back(f);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+}
+
 } // namespace rf

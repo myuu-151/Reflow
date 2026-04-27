@@ -93,6 +93,7 @@ struct Mesh {
     void triangulate_selected_faces(TriMode mode = TriMode::Fixed);
     void untriangulate_selected_faces();
     void merge_selected_faces();
+    void subdivide_selected_faces();
 
     // Loop cut: find the edge loop crossing the given edge, return list of edge indices
     std::vector<int> find_edge_loop(int edgeIdx) const;
