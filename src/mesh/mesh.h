@@ -89,6 +89,9 @@ struct Mesh {
     void extrude_selected_faces();
     void delete_selected();
     void translate_selected(const glm::vec3& delta);
+    enum class TriMode { Fixed, Alternate };
+    void triangulate_selected_faces(TriMode mode = TriMode::Fixed);
+    void untriangulate_selected_faces();
 
     // Loop cut: find the edge loop crossing the given edge, return list of edge indices
     std::vector<int> find_edge_loop(int edgeIdx) const;

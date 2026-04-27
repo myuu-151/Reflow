@@ -49,6 +49,8 @@ static rf::UIState g_uiState;
 static bool g_openNormalsMenu = false;
 static bool g_openDeleteConfirm = false;
 static bool g_openDeleteMenu = false;
+static bool g_openTriMenu = false;
+static rf::Mesh::TriMode g_triMode = rf::Mesh::TriMode::Fixed;
 
 // Input state
 static bool g_mmb_down = false;
@@ -514,8 +516,20 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
 
             switch (g_uiState.selectMode) {
                 case rf::SelectMode::Vertex: {
-                    int vi = mesh.pick_vertex(rayO, rayD);
-                    if (vi >= 0) mesh.verts[vi].selected = !mesh.verts[vi].selected || !shift;
+                    if (alt) {
+                        int ei = mesh.pick_edge(rayO, rayD);
+                        if (ei >= 0) {
+                            auto loop = mesh.find_edge_ring(ei);
+                            for (int le : loop) {
+                                int he = mesh.edges[le].he;
+                                mesh.verts[mesh.hedges[mesh.hedges[he].prev].vertex].selected = true;
+                                mesh.verts[mesh.hedges[he].vertex].selected = true;
+                            }
+                        }
+                    } else {
+                        int vi = mesh.pick_vertex(rayO, rayD);
+                        if (vi >= 0) mesh.verts[vi].selected = !mesh.verts[vi].selected || !shift;
+                    }
                     break;
                 }
                 case rf::SelectMode::Edge: {
@@ -877,6 +891,75 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                     mesh.extrude_selected_faces();
                     g_uiState.selectMode = rf::SelectMode::Face;
                     start_transform(1);
+                }
+            }
+            break;
+
+        // Triangulate (Ctrl+T)
+        case GLFW_KEY_T:
+            if ((mods & GLFW_MOD_CONTROL) && !g_meshes.empty() &&
+                g_uiState.selectMode != rf::SelectMode::Object) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                // Auto-select faces from vertex/edge selection
+                if (g_uiState.selectMode == rf::SelectMode::Vertex ||
+                    g_uiState.selectMode == rf::SelectMode::Edge) {
+                    if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                        for (auto& e : mesh.edges) {
+                            if (!e.selected) continue;
+                            int he = e.he;
+                            mesh.verts[mesh.hedges[mesh.hedges[he].prev].vertex].selected = true;
+                            mesh.verts[mesh.hedges[he].vertex].selected = true;
+                        }
+                    }
+                    for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                        int start = mesh.faces[fi].edge;
+                        int cur = start;
+                        bool allSel = true;
+                        do {
+                            if (!mesh.verts[mesh.hedges[cur].vertex].selected) allSel = false;
+                            cur = mesh.hedges[cur].next;
+                        } while (cur != start && allSel);
+                        if (allSel) mesh.faces[fi].selected = true;
+                    }
+                }
+                if (mesh.count_selected_faces() > 0) {
+                    push_undo();
+                    mesh.triangulate_selected_faces(g_triMode);
+                    g_openTriMenu = true;
+                }
+            }
+            break;
+
+        // Untriangulate / Tris to Quads (Alt+J)
+        case GLFW_KEY_J:
+            if ((mods & GLFW_MOD_ALT) && !g_meshes.empty() &&
+                g_uiState.selectMode != rf::SelectMode::Object) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                // Auto-select faces from vertex/edge selection
+                if (g_uiState.selectMode == rf::SelectMode::Vertex ||
+                    g_uiState.selectMode == rf::SelectMode::Edge) {
+                    if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                        for (auto& e : mesh.edges) {
+                            if (!e.selected) continue;
+                            int he = e.he;
+                            mesh.verts[mesh.hedges[mesh.hedges[he].prev].vertex].selected = true;
+                            mesh.verts[mesh.hedges[he].vertex].selected = true;
+                        }
+                    }
+                    for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                        int start = mesh.faces[fi].edge;
+                        int cur = start;
+                        bool allSel = true;
+                        do {
+                            if (!mesh.verts[mesh.hedges[cur].vertex].selected) allSel = false;
+                            cur = mesh.hedges[cur].next;
+                        } while (cur != start && allSel);
+                        if (allSel) mesh.faces[fi].selected = true;
+                    }
+                }
+                if (mesh.count_selected_faces() > 0) {
+                    push_undo();
+                    mesh.untriangulate_selected_faces();
                 }
             }
             break;
@@ -2207,6 +2290,44 @@ int main()
                 g_objectSelected = false;
                 if (g_selectedMesh >= (int)g_meshes.size())
                     g_selectedMesh = std::max(0, (int)g_meshes.size() - 1);
+            }
+            ImGui::EndPopup();
+        }
+
+        // Triangulate options popup
+        if (g_openTriMenu) {
+            ImGui::OpenPopup("##TriMenu");
+            g_openTriMenu = false;
+        }
+        if (ImGui::BeginPopup("##TriMenu")) {
+            ImGui::TextUnformatted("Triangulate");
+            ImGui::Separator();
+            if (ImGui::MenuItem("Fixed", nullptr, g_triMode == rf::Mesh::TriMode::Fixed)) {
+                if (g_triMode != rf::Mesh::TriMode::Fixed) {
+                    g_triMode = rf::Mesh::TriMode::Fixed;
+                    // Re-apply: undo current and redo with new mode
+                    do_undo();
+                    if (!g_meshes.empty()) {
+                        auto& mesh = g_meshes[g_selectedMesh];
+                        if (mesh.count_selected_faces() > 0) {
+                            push_undo();
+                            mesh.triangulate_selected_faces(g_triMode);
+                        }
+                    }
+                }
+            }
+            if (ImGui::MenuItem("Alternate", nullptr, g_triMode == rf::Mesh::TriMode::Alternate)) {
+                if (g_triMode != rf::Mesh::TriMode::Alternate) {
+                    g_triMode = rf::Mesh::TriMode::Alternate;
+                    do_undo();
+                    if (!g_meshes.empty()) {
+                        auto& mesh = g_meshes[g_selectedMesh];
+                        if (mesh.count_selected_faces() > 0) {
+                            push_undo();
+                            mesh.triangulate_selected_faces(g_triMode);
+                        }
+                    }
+                }
             }
             ImGui::EndPopup();
         }

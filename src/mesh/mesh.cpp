@@ -1208,6 +1208,255 @@ void Mesh::delete_selected()
 }
 
 // ---------------------------------------------------------------------------
+// Triangulate selected faces
+// ---------------------------------------------------------------------------
+void Mesh::triangulate_selected_faces(TriMode mode)
+{
+    struct FLoop { std::vector<int> v; bool sel; };
+    std::vector<FLoop> newFaces;
+    int quadIdx = 0;
+
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        std::vector<int> fv;
+        int start = faces[fi].edge;
+        int cur = start;
+        do { fv.push_back(hedges[cur].vertex); cur = hedges[cur].next; }
+        while (cur != start && (int)fv.size() < 64);
+
+        if (faces[fi].selected && (int)fv.size() > 3) {
+            if ((int)fv.size() == 4) {
+                bool useDiag02;
+                if (mode == TriMode::Fixed) {
+                    useDiag02 = true;
+                } else {
+                    // Alternate: flip diagonal every other quad
+                    useDiag02 = (quadIdx % 2 == 0);
+                }
+                quadIdx++;
+
+                if (useDiag02) {
+                    newFaces.push_back({{fv[0], fv[1], fv[2]}, true});
+                    newFaces.push_back({{fv[0], fv[2], fv[3]}, true});
+                } else {
+                    newFaces.push_back({{fv[1], fv[2], fv[3]}, true});
+                    newFaces.push_back({{fv[1], fv[3], fv[0]}, true});
+                }
+            } else {
+                // Ngon: fan triangulate from first vertex
+                for (int i = 1; i + 1 < (int)fv.size(); i++)
+                    newFaces.push_back({{fv[0], fv[i], fv[i+1]}, true});
+            }
+        } else {
+            newFaces.push_back({fv, faces[fi].selected});
+        }
+    }
+
+    // Rebuild topology
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : newFaces) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+        Face f;
+        f.edge = base;
+        f.selected = fl.sel;
+        f.normal = {0, 0, 0};
+        faces.push_back(f);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+}
+
+// ---------------------------------------------------------------------------
+// Untriangulate (tris to quads) selected faces
+// ---------------------------------------------------------------------------
+void Mesh::untriangulate_selected_faces()
+{
+    // Find pairs of adjacent selected triangles that can merge into a quad
+    std::vector<bool> merged(faces.size(), false);
+
+    struct FLoop { std::vector<int> v; bool sel; };
+    std::vector<FLoop> newFaces;
+
+    // For each pair of selected triangles sharing an edge, try to merge
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        if (merged[fi]) continue;
+        if (!faces[fi].selected) {
+            // Keep non-selected faces as-is
+            std::vector<int> fv;
+            int start = faces[fi].edge;
+            int cur = start;
+            do { fv.push_back(hedges[cur].vertex); cur = hedges[cur].next; }
+            while (cur != start && (int)fv.size() < 64);
+            newFaces.push_back({fv, false});
+            continue;
+        }
+
+        // Check if this is a triangle
+        std::vector<int> fv;
+        int start = faces[fi].edge;
+        int cur = start;
+        do { fv.push_back(hedges[cur].vertex); cur = hedges[cur].next; }
+        while (cur != start && (int)fv.size() < 64);
+
+        if ((int)fv.size() != 3) {
+            newFaces.push_back({fv, true});
+            continue;
+        }
+
+        // Find best adjacent selected triangle to merge with
+        int bestFj = -1;
+        int bestSharedHe = -1;
+        float bestScore = -1e30f;
+
+        cur = start;
+        do {
+            int tw = hedges[cur].twin;
+            if (tw >= 0) {
+                int fj = hedges[tw].face;
+                if (fj >= 0 && fj != fi && !merged[fj] && faces[fj].selected) {
+                    // Check fj is also a triangle
+                    int cnt = 0;
+                    int s2 = faces[fj].edge;
+                    int c2 = s2;
+                    do { cnt++; c2 = hedges[c2].next; } while (c2 != s2 && cnt < 64);
+                    if (cnt == 3) {
+                        // Score: prefer merging where the resulting quad is most planar/rectangular
+                        // Use the dot product of the two triangle normals as score
+                        float score = glm::dot(faces[fi].normal, faces[fj].normal);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestFj = fj;
+                            bestSharedHe = cur;
+                        }
+                    }
+                }
+            }
+            cur = hedges[cur].next;
+        } while (cur != start);
+
+        if (bestFj >= 0 && bestScore > 0.0f) {
+            merged[fi] = true;
+            merged[bestFj] = true;
+
+            // Build quad: walk around both triangles skipping the shared edge
+            // Shared edge: bestSharedHe (in fi) and its twin (in bestFj)
+            int tw = hedges[bestSharedHe].twin;
+
+            // From fi: the two vertices NOT on the shared edge's destination
+            // Walk fi skipping bestSharedHe
+            std::vector<int> quad;
+            cur = hedges[bestSharedHe].next;
+            while (cur != bestSharedHe) {
+                quad.push_back(hedges[hedges[cur].prev].vertex);
+                cur = hedges[cur].next;
+            }
+            // From fj: walk skipping tw
+            cur = hedges[tw].next;
+            while (cur != tw) {
+                quad.push_back(hedges[hedges[cur].prev].vertex);
+                cur = hedges[cur].next;
+            }
+
+            newFaces.push_back({quad, true});
+        } else {
+            newFaces.push_back({fv, true});
+        }
+    }
+
+    // Rebuild topology
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : newFaces) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+        Face f;
+        f.edge = base;
+        f.selected = fl.sel;
+        f.normal = {0, 0, 0};
+        faces.push_back(f);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+}
+
+// ---------------------------------------------------------------------------
 // Project save
 // ---------------------------------------------------------------------------
 bool save_project(const std::string& path, const std::vector<Mesh>& meshes, const UIState* ui)
