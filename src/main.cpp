@@ -52,6 +52,12 @@ static bool g_openDeleteMenu = false;
 static bool g_openTriMenu = false;
 static rf::Mesh::TriMode g_triMode = rf::Mesh::TriMode::Fixed;
 
+// Circle select (C key)
+static bool g_circleSelectMode = false;
+static bool g_circleSelectActive = false; // LMB held
+static float g_circleSelectRadius = 50.0f;
+static double g_circleSelectX = 0, g_circleSelectY = 0;
+
 // Input state
 static bool g_mmb_down = false;
 static bool g_rmb_down = false;
@@ -486,6 +492,18 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
 {
     if (ImGui::GetIO().WantCaptureMouse) return;
 
+    // Circle select: LMB to paint select, RMB to exit
+    if (g_circleSelectMode) {
+        if (button == GLFW_MOUSE_BUTTON_LEFT) {
+            g_circleSelectActive = (action == GLFW_PRESS);
+        }
+        if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+            g_circleSelectMode = false;
+            g_circleSelectActive = false;
+        }
+        return;
+    }
+
     if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
         g_mmb_down = (action == GLFW_PRESS);
         glfwGetCursorPos(win, &g_lastX, &g_lastY);
@@ -651,6 +669,67 @@ static void cb_cursor(GLFWwindow* win, double x, double y)
         g_boxEndY = y;
     }
 
+    // Circle select: track position and paint-select while LMB held
+    if (g_circleSelectMode) {
+        g_circleSelectX = x;
+        g_circleSelectY = y;
+
+        if (g_circleSelectActive && !g_meshes.empty() && mouse_in_viewport(x, y)) {
+            auto& mesh = g_meshes[g_selectedMesh];
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+            glm::mat4 mvp = g_projMat * g_viewMat * model;
+            float topBar = rf::ui_top_bar_height();
+
+            if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                for (int vi = 0; vi < (int)mesh.verts.size(); vi++) {
+                    glm::vec4 clip = mvp * glm::vec4(mesh.verts[vi].pos, 1.0f);
+                    if (clip.w <= 0) continue;
+                    float sx = (clip.x / clip.w * 0.5f + 0.5f) * g_vpW + g_vpX;
+                    float sy = (1.0f - (clip.y / clip.w * 0.5f + 0.5f)) * g_vpH + topBar;
+                    float dist = std::sqrt((float)((sx - x) * (sx - x) + (sy - y) * (sy - y)));
+                    if (dist <= g_circleSelectRadius)
+                        mesh.verts[vi].selected = true;
+                }
+            } else if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                    int he = mesh.edges[ei].he;
+                    int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                    int vb = mesh.hedges[he].vertex;
+                    glm::vec4 ca = mvp * glm::vec4(mesh.verts[va].pos, 1.0f);
+                    glm::vec4 cb = mvp * glm::vec4(mesh.verts[vb].pos, 1.0f);
+                    if (ca.w <= 0 && cb.w <= 0) continue;
+                    float sxa = (ca.x / ca.w * 0.5f + 0.5f) * g_vpW + g_vpX;
+                    float sya = (1.0f - (ca.y / ca.w * 0.5f + 0.5f)) * g_vpH + topBar;
+                    float sxb = (cb.x / cb.w * 0.5f + 0.5f) * g_vpW + g_vpX;
+                    float syb = (1.0f - (cb.y / cb.w * 0.5f + 0.5f)) * g_vpH + topBar;
+                    float mx2 = (sxa + sxb) * 0.5f;
+                    float my2 = (sya + syb) * 0.5f;
+                    float dist = std::sqrt((float)((mx2 - x) * (mx2 - x) + (my2 - y) * (my2 - y)));
+                    if (dist <= g_circleSelectRadius)
+                        mesh.edges[ei].selected = true;
+                }
+            } else if (g_uiState.selectMode == rf::SelectMode::Face) {
+                for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                    std::vector<int> fv;
+                    int start = mesh.faces[fi].edge;
+                    int cur = start;
+                    do { fv.push_back(mesh.hedges[cur].vertex); cur = mesh.hedges[cur].next; }
+                    while (cur != start && (int)fv.size() < 64);
+                    glm::vec3 center(0);
+                    for (int vi : fv) center += mesh.verts[vi].pos;
+                    center /= (float)fv.size();
+                    glm::vec4 clip = mvp * glm::vec4(center, 1.0f);
+                    if (clip.w <= 0) continue;
+                    float sx = (clip.x / clip.w * 0.5f + 0.5f) * g_vpW + g_vpX;
+                    float sy = (1.0f - (clip.y / clip.w * 0.5f + 0.5f)) * g_vpH + topBar;
+                    float dist = std::sqrt((float)((sx - x) * (sx - x) + (sy - y) * (sy - y)));
+                    if (dist <= g_circleSelectRadius)
+                        mesh.faces[fi].selected = true;
+                }
+            }
+        }
+    }
+
     // Slide mode: mouse Y controls slide offset
     if (g_loopSlideMode && !g_meshes.empty() && !g_slideData.empty()) {
         // Determine if positive offset = screen-up by projecting the slide direction
@@ -709,6 +788,12 @@ static void cb_scroll(GLFWwindow*, double, double dy)
         return;
     }
     if (g_loopSlideMode) return;
+    if (g_circleSelectMode) {
+        g_circleSelectRadius += (float)dy * 10.0f;
+        if (g_circleSelectRadius < 10.0f) g_circleSelectRadius = 10.0f;
+        if (g_circleSelectRadius > 500.0f) g_circleSelectRadius = 500.0f;
+        return;
+    }
     g_camera.zoom((float)dy);
 }
 
@@ -716,6 +801,15 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
 {
     if (ImGui::GetIO().WantTextInput) return;
     if (action != GLFW_PRESS) return;
+
+    // Circle select mode
+    if (g_circleSelectMode) {
+        if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_C) {
+            g_circleSelectMode = false;
+            g_circleSelectActive = false;
+        }
+        return;
+    }
 
     // Undo: Ctrl+Z
     if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL) && !(mods & GLFW_MOD_ALT)) {
@@ -1108,6 +1202,18 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                     }
                     for (int ei : toDeselect) mesh.edges[ei].selected = false;
                 }
+            }
+            break;
+
+        // C = circle select mode
+        case GLFW_KEY_C:
+            if (g_uiState.selectMode != rf::SelectMode::Object && !g_meshes.empty()) {
+                g_circleSelectMode = true;
+                g_circleSelectActive = false;
+                double mx, my;
+                glfwGetCursorPos(glfwGetCurrentContext(), &mx, &my);
+                g_circleSelectX = mx;
+                g_circleSelectY = my;
             }
             break;
 
@@ -1980,6 +2086,46 @@ static void render_viewport()
         glLineWidth(2.0f);
         glDisable(GL_DEPTH_TEST);
         glDrawArrays(GL_LINES, 0, 2);
+        glEnable(GL_DEPTH_TEST);
+        glLineWidth(1.0f);
+        glBindVertexArray(0);
+    }
+
+    // Circle select overlay
+    if (g_circleSelectMode) {
+        // Convert screen coords to viewport-relative
+        float cx = (float)g_circleSelectX - g_vpX;
+        float cy = (float)g_circleSelectY - rf::ui_top_bar_height();
+        float r  = g_circleSelectRadius;
+
+        // 2D ortho projection over viewport
+        glm::mat4 ortho = glm::ortho(0.0f, (float)g_vpW, (float)g_vpH, 0.0f);
+
+        const int segs = 64;
+        std::vector<float> circleBuf(segs * 2 * 3); // segs line segments, 2 verts each, 3 floats
+        for (int i = 0; i < segs; i++) {
+            float a0 = (float)i / segs * 6.2831853f;
+            float a1 = (float)(i + 1) / segs * 6.2831853f;
+            circleBuf[i * 6 + 0] = cx + cosf(a0) * r;
+            circleBuf[i * 6 + 1] = cy + sinf(a0) * r;
+            circleBuf[i * 6 + 2] = 0.0f;
+            circleBuf[i * 6 + 3] = cx + cosf(a1) * r;
+            circleBuf[i * 6 + 4] = cy + sinf(a1) * r;
+            circleBuf[i * 6 + 5] = 0.0f;
+        }
+
+        glBindVertexArray(g_selVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+        glBufferData(GL_ARRAY_BUFFER, circleBuf.size() * sizeof(float), circleBuf.data(), GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+
+        g_wireShader.use();
+        g_wireShader.set_mat4("uMVP", ortho);
+        g_wireShader.set_vec3("uColor", glm::vec3(1.0f, 1.0f, 1.0f));
+        glDisable(GL_DEPTH_TEST);
+        glLineWidth(1.5f);
+        glDrawArrays(GL_LINES, 0, segs * 2);
         glEnable(GL_DEPTH_TEST);
         glLineWidth(1.0f);
         glBindVertexArray(0);
