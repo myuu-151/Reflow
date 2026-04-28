@@ -63,8 +63,8 @@ static GLuint g_selTex[4] = {}; // Object, Vertex, Edge, Face
 static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
 
 // Properties panel tab
-static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers
-static GLuint g_propTabTex[3] = {}; // Object, Material, Modifiers icons
+static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers, 3=Data
+static GLuint g_propTabTex[4] = {}; // Object, Material, Modifiers, Data icons
 
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
 static GLuint load_texture(const char* path)
@@ -178,8 +178,9 @@ void ui_init(GLFWwindow* win)
         "res/icon_object_prop.png",
         "res/icon_material.png",
         "res/icon_wrench.png",
+        "res/icon_data.png",
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         std::string path = exe_relative(propTabFiles[i]);
         g_propTabTex[i] = load_texture(path.c_str());
     }
@@ -679,8 +680,8 @@ void ui_properties_panel(UIState& state)
         float iconSz = s(18);
         float padObj = s(3);
         float padMat = s(1.75f);
-        const char* tabLabels[] = {"##PropObj", "##PropMat", "##PropMod"};
-        for (int i = 0; i < 3; i++) {
+        const char* tabLabels[] = {"##PropObj", "##PropMat", "##PropMod", "##PropData"};
+        for (int i = 0; i < 4; i++) {
             if (i > 0) ImGui::SameLine(0, s(2));
 
             bool active = (g_propTab == i);
@@ -697,7 +698,7 @@ void ui_properties_panel(UIState& state)
                 g_propTab = i;
 
             if (g_propTabTex[i]) {
-                float p = (i == 0) ? padObj : (i == 1) ? padMat : s(2);
+                float p = (i == 0) ? padObj : (i == 1) ? padMat : (i == 2) ? s(2) : s(1.5f);
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 dl->AddImage((ImTextureID)(intptr_t)g_propTabTex[i],
                     {btnPos.x + p, btnPos.y + p},
@@ -1149,6 +1150,43 @@ void ui_properties_panel(UIState& state)
                     }
                     ImGui::EndPopup();
                 }
+            }
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
+            ImGui::Text("No object selected");
+            ImGui::PopStyleColor();
+        }
+    } else if (g_propTab == 3) {
+        // ---- Data tab ----
+        bool hasMesh = state.meshes && !state.meshes->empty() && state.selectedMesh &&
+                       *state.selectedMesh >= 0 && *state.selectedMesh < (int)state.meshes->size();
+
+        if (hasMesh) {
+            auto& mesh = (*state.meshes)[*state.selectedMesh];
+
+            ImGui::Text("Mesh Data");
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::Text("Vertices:  %d", (int)mesh.verts.size());
+            ImGui::Text("Edges:     %d", (int)mesh.edges.size());
+            ImGui::Text("Faces:     %d", (int)mesh.faces.size());
+            ImGui::Text("Half-edges: %d", (int)mesh.hedges.size());
+            ImGui::Text("Triangles: %d", mesh.triCount);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            int selV = mesh.count_selected_verts();
+            int selE = mesh.count_selected_edges();
+            int selF = mesh.count_selected_faces();
+            if (selV > 0 || selE > 0 || selF > 0) {
+                ImGui::Text("Selected");
+                ImGui::Separator();
+                if (selV > 0) ImGui::Text("Verts: %d", selV);
+                if (selE > 0) ImGui::Text("Edges: %d", selE);
+                if (selF > 0) ImGui::Text("Faces: %d", selF);
             }
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
