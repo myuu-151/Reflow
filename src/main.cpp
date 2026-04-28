@@ -464,6 +464,13 @@ static void cancel_transform()
 
 static void confirm_transform()
 {
+    if (g_transformMode == 6 && !g_meshes.empty()) {
+        // Faces are already marked selected by bevel code
+        // Face overlay renders in all modes via face.selected check
+        // Push undo so Ctrl+Z restores post-bevel state (with highlights)
+        push_undo();
+        g_bevelData.clear();
+    }
     g_transformMode = 0;
     g_grab_axis = -1;
     g_edgeSlideData.clear();
@@ -1950,7 +1957,7 @@ static void render_viewport()
                 glDrawArrays(GL_POINTS, 0, (int)buf.size() / 3);
             }
 
-            // Translucent fill on front-facing faces where all verts are selected
+            // Translucent fill on front-facing faces where all verts are selected or face itself is selected
             buf.clear();
             for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
                 if (!faceFront[fi]) continue;
@@ -1964,7 +1971,7 @@ static void render_viewport()
                     if (!mesh.verts[vi].selected) allSel = false;
                     cur = mesh.hedges[cur].next;
                 } while (cur != start && (int)fv.size() < 64);
-                if (!allSel) continue;
+                if (!allSel && !mesh.faces[fi].selected) continue;
                 for (int i = 1; i + 1 < (int)fv.size(); i++) {
                     int tri[3] = {fv[0], fv[i], fv[i+1]};
                     for (int k = 0; k < 3; k++) {
@@ -2038,6 +2045,41 @@ static void render_viewport()
                 glDrawArrays(GL_LINES, 0, (int)buf.size() / 3);
                 glDepthFunc(GL_LESS);
                 glLineWidth(1.0f);
+            }
+
+            // Translucent fill on faces marked selected (e.g. after bevel)
+            buf.clear();
+            for (int fi = 0; fi < (int)mesh.faces.size(); fi++) {
+                if (!mesh.faces[fi].selected || !faceFront[fi]) continue;
+                std::vector<int> fv;
+                int start = mesh.faces[fi].edge;
+                int cur = start;
+                do { fv.push_back(mesh.hedges[cur].vertex); cur = mesh.hedges[cur].next; }
+                while (cur != start && (int)fv.size() < 64);
+                for (int i = 1; i + 1 < (int)fv.size(); i++) {
+                    int tri[3] = {fv[0], fv[i], fv[i+1]};
+                    for (int k = 0; k < 3; k++) {
+                        auto& p = mesh.verts[tri[k]].pos;
+                        buf.push_back(p.x); buf.push_back(p.y); buf.push_back(p.z);
+                    }
+                }
+            }
+            if (!buf.empty()) {
+                glBindBuffer(GL_ARRAY_BUFFER, g_selVBO);
+                glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+                glEnableVertexAttribArray(0);
+                g_wireShader.set_vec3("uColor", kSelectColor);
+                glEnable(GL_BLEND);
+                glBlendColor(0, 0, 0, 0.3f);
+                glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+                glDepthFunc(GL_LEQUAL);
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(-2.0f, -2.0f);
+                glDrawArrays(GL_TRIANGLES, 0, (int)buf.size() / 3);
+                glDisable(GL_POLYGON_OFFSET_FILL);
+                glDepthFunc(GL_LESS);
+                glDisable(GL_BLEND);
             }
         }
         else if (g_uiState.selectMode == rf::SelectMode::Face) {

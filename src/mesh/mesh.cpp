@@ -2010,7 +2010,7 @@ std::vector<Mesh::BevelVert> Mesh::bevel_selected_edges(int segments)
                 it_va_fi2 != replaceMap.end() && it_vb_fi2 != replaceMap.end()) {
                 // Bevel quad: fill gap between the two modified faces
                 newFaces.push_back({{it_vb_fi->second, it_va_fi->second,
-                                     it_va_fi2->second, it_vb_fi2->second}, false});
+                                     it_va_fi2->second, it_vb_fi2->second}, true});
             }
         }
     }
@@ -2093,7 +2093,7 @@ std::vector<Mesh::BevelVert> Mesh::bevel_selected_edges(int segments)
             if (glm::dot(n, outDir) < 0.0f)
                 std::reverse(unique.begin(), unique.end());
 
-            newFaces.push_back({unique, false});
+            newFaces.push_back({unique, true});
         }
     }
 
@@ -2284,7 +2284,7 @@ std::vector<Mesh::BevelVert> Mesh::bevel_selected_vertices()
         } while (curHE != startHE && safety < 64);
 
         if ((int)cornerVerts.size() >= 3) {
-            newFaces.push_back({cornerVerts, false});
+            newFaces.push_back({cornerVerts, true});
         }
     }
 
