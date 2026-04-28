@@ -1576,20 +1576,37 @@ static void render_viewport()
         glUniform1fv(glGetUniformLocation(g_meshShader.id, "uSpecRampVal"), count, val);
     }
 
-    for (auto& mesh : g_meshes) {
-        if (!mesh.visible) continue;
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
-        glm::mat4 mvp = vp * model;
-        g_meshShader.set_mat4("uMVP", mvp);
-        g_meshShader.set_mat4("uModel", model);
-        g_meshShader.set_vec3("uColor", kMeshColor);
+    bool wireframeMode = (g_uiState.viewMode == rf::ViewMode::Wireframe);
 
-        glBindVertexArray(mesh.vao);
-        glDrawArrays(GL_TRIANGLES, 0, mesh.triCount * 3);
+    if (!wireframeMode) {
+        for (auto& mesh : g_meshes) {
+            if (!mesh.visible) continue;
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+            glm::mat4 mvp = vp * model;
+            g_meshShader.set_mat4("uMVP", mvp);
+            g_meshShader.set_mat4("uModel", model);
+            g_meshShader.set_vec3("uColor", kMeshColor);
+
+            glBindVertexArray(mesh.vao);
+            glDrawArrays(GL_TRIANGLES, 0, mesh.triCount * 3);
+        }
     }
 
     if (needOffset) {
         glDisable(GL_POLYGON_OFFSET_FILL);
+    }
+
+    // Wireframe shading mode: draw edge wireframe for all meshes
+    if (wireframeMode) {
+        g_wireShader.use();
+        for (auto& mesh : g_meshes) {
+            if (!mesh.visible) continue;
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
+            g_wireShader.set_mat4("uMVP", vp * model);
+            g_wireShader.set_vec3("uColor", {0.7f, 0.7f, 0.7f});
+            glBindVertexArray(mesh.wireVao);
+            glDrawArrays(GL_LINES, 0, mesh.wireLineCount * 2);
+        }
     }
 
     // --- Object mode silhouette outline (back-face method) ---

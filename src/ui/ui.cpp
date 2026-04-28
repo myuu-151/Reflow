@@ -503,7 +503,7 @@ void ui_objects_panel(UIState& state)
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     // Header
-    ImGui::Text("OBJECTS");
+    ImGui::Text("Outliner");
     ImGui::SameLine(rightPanelWidth() - s(35));
     ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
     if (g_iconFont) ImGui::PushFont(g_iconFont);
