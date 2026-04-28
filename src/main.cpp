@@ -52,6 +52,44 @@ static bool g_openDeleteMenu = false;
 static bool g_openTriMenu = false;
 static rf::Mesh::TriMode g_triMode = rf::Mesh::TriMode::Fixed;
 
+// Smooth vertices operator state
+static bool g_smoothVertsPanelOpen = false;
+static float g_smoothFactor = 1.0f;
+static int g_smoothRepeat = 1;
+static std::vector<glm::vec3> g_smoothOrigPos; // positions before smooth
+
+static void apply_smooth_verts(rf::Mesh& m, float factor, int repeat) {
+    // Restore original positions first
+    for (int vi = 0; vi < (int)m.verts.size() && vi < (int)g_smoothOrigPos.size(); vi++)
+        m.verts[vi].pos = g_smoothOrigPos[vi];
+
+    for (int r = 0; r < repeat; r++) {
+        std::vector<glm::vec3> newPos(m.verts.size());
+        for (int vi = 0; vi < (int)m.verts.size(); vi++)
+            newPos[vi] = m.verts[vi].pos;
+        for (int vi = 0; vi < (int)m.verts.size(); vi++) {
+            if (!m.verts[vi].selected) continue;
+            glm::vec3 avg(0);
+            int count = 0;
+            for (int ei = 0; ei < (int)m.edges.size(); ei++) {
+                int he = m.edges[ei].he;
+                int va = m.hedges[m.hedges[he].prev].vertex;
+                int vb = m.hedges[he].vertex;
+                if (va == vi) { avg += m.verts[vb].pos; count++; }
+                else if (vb == vi) { avg += m.verts[va].pos; count++; }
+            }
+            if (count > 0) {
+                avg /= (float)count;
+                newPos[vi] = glm::mix(m.verts[vi].pos, avg, factor);
+            }
+        }
+        for (int vi = 0; vi < (int)m.verts.size(); vi++)
+            m.verts[vi].pos = newPos[vi];
+    }
+    m.recalc_normals();
+    m.rebuild_gpu();
+}
+
 // Circle select (C key)
 static bool g_circleSelectMode = false;
 static bool g_circleSelectActive = false; // LMB held
@@ -1470,10 +1508,10 @@ static void update_transform(GLFWwindow* win)
         if (dirLen > 1e-6f) avgScreenDir /= dirLen;
         else avgScreenDir = glm::vec2(0.0f, 1.0f);
 
-        // Project mouse delta onto that screen direction
-        glm::vec2 mouseDelta((float)(mx - g_grab_startMX) / (g_vpW * 0.5f),
-                            -(float)(my - g_grab_startMY) / (g_vpH * 0.5f));
-        float factor = glm::dot(mouseDelta, avgScreenDir) / glm::max(dirLen, 0.3f);
+        // Project mouse delta onto average rail screen direction
+        glm::vec2 mouseDelta((float)(mx - g_grab_startMX),
+                            -(float)(my - g_grab_startMY));
+        float factor = glm::dot(mouseDelta, avgScreenDir) / 150.0f;
         factor = glm::clamp(factor, -1.0f, 1.0f);
 
         for (auto& sv : g_edgeSlideData) {
@@ -2727,6 +2765,19 @@ int main()
             }
             if (g_uiState.selectMode != rf::SelectMode::Object) {
                 ImGui::Separator();
+                if (ImGui::MenuItem("Smooth Vertices")) {
+                    if (!g_meshes.empty()) {
+                        push_undo();
+                        auto& m = g_meshes[g_selectedMesh];
+                        g_smoothFactor = 1.0f;
+                        g_smoothRepeat = 1;
+                        g_smoothOrigPos.resize(m.verts.size());
+                        for (int vi = 0; vi < (int)m.verts.size(); vi++)
+                            g_smoothOrigPos[vi] = m.verts[vi].pos;
+                        apply_smooth_verts(m, g_smoothFactor, g_smoothRepeat);
+                        g_smoothVertsPanelOpen = true;
+                    }
+                }
                 if (ImGui::MenuItem("Subdivide")) {
                     if (!g_meshes.empty()) {
                         push_undo();
@@ -2783,6 +2834,41 @@ int main()
                 }
             }
             ImGui::EndPopup();
+        }
+
+        // Smooth Vertices options panel (bottom-left of viewport)
+        if (g_smoothVertsPanelOpen && !g_meshes.empty()) {
+            float sc = g_uiState.uiScale;
+            float panelW = 200 * sc;
+            float margin = 8 * sc;
+            ImVec2 panelPos((float)g_vpX + margin,
+                            (float)(g_vpY + g_vpH) - margin);
+            // Anchor to bottom-left, grow upward
+            ImGui::SetNextWindowPos(panelPos, ImGuiCond_Always, {0.0f, 1.0f});
+            ImGui::SetNextWindowSize({panelW, 0});
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8 * sc, 6 * sc});
+            if (ImGui::Begin("##SmoothOpts", nullptr,
+                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar)) {
+                bool changed = false;
+                if (ImGui::CollapsingHeader("Smooth Vertices", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::DragFloat("##Smoothing", &g_smoothFactor, 0.01f, 0.0f, 1.0f, "Smoothing  %.3f"))
+                        changed = true;
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::DragInt("##Repeat", &g_smoothRepeat, 0.1f, 1, 100, "Repeat  %d"))
+                        changed = true;
+                    if (g_smoothRepeat < 1) g_smoothRepeat = 1;
+                }
+                if (changed) {
+                    apply_smooth_verts(g_meshes[g_selectedMesh], g_smoothFactor, g_smoothRepeat);
+                }
+                // Close if user starts another operation
+                if (g_transformMode != 0 || g_loopCutMode || g_loopSlideMode)
+                    g_smoothVertsPanelOpen = false;
+            }
+            ImGui::End();
+            ImGui::PopStyleVar();
         }
 
         // Draw box select rectangle
