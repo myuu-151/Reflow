@@ -782,7 +782,7 @@ static void cb_cursor(GLFWwindow* win, double x, double y)
         float screenYB = pB.y / pB.w;
         float sign = (screenYB >= screenYA) ? 1.0f : -1.0f;
 
-        g_slideOffset = sign * (float)(g_slideStartY - y) / 150.0f;
+        g_slideOffset = sign * (float)(g_slideStartY - y) / 200.0f;
         g_slideOffset = glm::clamp(g_slideOffset, -0.95f, 0.95f);
         g_meshes[g_selectedMesh].slide_verts(g_slideData, g_slideOffset);
     }
@@ -1511,7 +1511,7 @@ static void update_transform(GLFWwindow* win)
         // Project mouse delta onto average rail screen direction
         glm::vec2 mouseDelta((float)(mx - g_grab_startMX),
                             -(float)(my - g_grab_startMY));
-        float factor = glm::dot(mouseDelta, avgScreenDir) / 150.0f;
+        float factor = glm::dot(mouseDelta, avgScreenDir) / 200.0f;
         factor = glm::clamp(factor, -1.0f, 1.0f);
 
         for (auto& sv : g_edgeSlideData) {
