@@ -683,6 +683,8 @@ void ui_objects_panel(UIState& state)
                 ImGui::OpenPopup("##OutlinerCtx");
             }
 
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, Colors::panelDark());
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, Colors::accent());
             if (ImGui::BeginPopup("##OutlinerCtx")) {
                 if (ImGui::MenuItem("Rename")) {
                     state.pendingRename = i;
@@ -708,11 +710,13 @@ void ui_objects_panel(UIState& state)
                     if (sel >= (int)meshes.size()) sel = (int)meshes.size() - 1;
                     if (meshes.empty() && state.objectSelected) *state.objectSelected = false;
                     ImGui::EndPopup();
+                    ImGui::PopStyleColor(2);
                     ImGui::PopID();
                     break;
                 }
                 ImGui::EndPopup();
             }
+            ImGui::PopStyleColor(2);
 
             ImGui::SetCursorScreenPos({eyeX - s(10), y});
             if (ImGui::InvisibleButton("##eye", {s(22), rowH}))

@@ -1599,18 +1599,20 @@ static void render_viewport()
     // Wireframe shading mode: draw edge wireframe for all meshes
     if (wireframeMode) {
         g_wireShader.use();
-        for (auto& mesh : g_meshes) {
+        for (int mi = 0; mi < (int)g_meshes.size(); mi++) {
+            auto& mesh = g_meshes[mi];
             if (!mesh.visible) continue;
             glm::mat4 model = glm::translate(glm::mat4(1.0f), mesh.position);
             g_wireShader.set_mat4("uMVP", vp * model);
-            g_wireShader.set_vec3("uColor", {0.7f, 0.7f, 0.7f});
+            bool isSel = g_objectSelected && mi == g_selectedMesh && g_uiState.selectMode == rf::SelectMode::Object;
+            g_wireShader.set_vec3("uColor", isSel ? glm::vec3(1.0f, 0.6f, 0.15f) : glm::vec3(0.7f, 0.7f, 0.7f));
             glBindVertexArray(mesh.wireVao);
             glDrawArrays(GL_LINES, 0, mesh.wireLineCount * 2);
         }
     }
 
     // --- Object mode silhouette outline (back-face method) ---
-    if (!g_meshes.empty() && g_objectSelected && g_uiState.selectMode == rf::SelectMode::Object && g_meshes[g_selectedMesh].visible) {
+    if (!wireframeMode && !g_meshes.empty() && g_objectSelected && g_uiState.selectMode == rf::SelectMode::Object && g_meshes[g_selectedMesh].visible) {
         auto& mesh = g_meshes[g_selectedMesh];
 
         float outlineScale = 1.008f;
