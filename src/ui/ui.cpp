@@ -63,8 +63,8 @@ static GLuint g_selTex[4] = {}; // Object, Vertex, Edge, Face
 static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
 
 // Properties panel tab
-static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers, 3=Data, 4=Armature
-static GLuint g_propTabTex[5] = {}; // Object, Material, Modifiers, Data, Armature icons
+static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers, 3=Data, 4=Armature, 5=Light
+static GLuint g_propTabTex[6] = {}; // Object, Material, Modifiers, Data, Armature, Light icons
 
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
 static GLuint load_texture(const char* path)
@@ -181,8 +181,9 @@ void ui_init(GLFWwindow* win)
         "res/icon_wrench.png",
         "res/icon_data.png",
         "res/icon_bone.png",
+        "res/icon_light.png",
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         std::string path = exe_relative(propTabFiles[i]);
         g_propTabTex[i] = load_texture(path.c_str());
     }
@@ -682,8 +683,8 @@ void ui_properties_panel(UIState& state)
         float iconSz = s(18);
         float padObj = s(3);
         float padMat = s(1.75f);
-        const char* tabLabels[] = {"##PropObj", "##PropMat", "##PropMod", "##PropData", "##PropArm"};
-        for (int i = 0; i < 5; i++) {
+        const char* tabLabels[] = {"##PropObj", "##PropMat", "##PropMod", "##PropData", "##PropArm", "##PropLight"};
+        for (int i = 0; i < 6; i++) {
             if (i > 0) ImGui::SameLine(0, s(2));
 
             bool active = (g_propTab == i);
@@ -1199,6 +1200,11 @@ void ui_properties_panel(UIState& state)
         // ---- Armature tab ----
         ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
         ImGui::Text("No armature data");
+        ImGui::PopStyleColor();
+    } else if (g_propTab == 5) {
+        // ---- Light tab ----
+        ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
+        ImGui::Text("No light data");
         ImGui::PopStyleColor();
     }
 
