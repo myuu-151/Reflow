@@ -785,6 +785,14 @@ void ui_objects_panel(UIState& state)
                 dl->AddText(g_iconFont, eyeFontSz, {eyeX - etsz.x * 0.5f, cy - etsz.y * 0.5f}, eyeCol, eyeStr);
             }
         }
+
+        // X key deletes selected object when outliner is hovered
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+            ImGui::IsKeyPressed(ImGuiKey_X) && !meshes.empty() && sel >= 0 && sel < (int)meshes.size()) {
+            meshes.erase(meshes.begin() + sel);
+            if (sel >= (int)meshes.size()) sel = (int)meshes.size() - 1;
+            if (meshes.empty() && state.objectSelected) *state.objectSelected = false;
+        }
     }
 
     ImGui::End();

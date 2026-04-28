@@ -812,14 +812,14 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
         return;
     }
 
-    // Undo: Ctrl+Z
-    if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL) && !(mods & GLFW_MOD_ALT)) {
-        do_undo();
+    // Redo: Ctrl+Shift+Z or Ctrl+Alt+Z
+    if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL) && ((mods & GLFW_MOD_SHIFT) || (mods & GLFW_MOD_ALT))) {
+        do_redo();
         return;
     }
-    // Redo: Ctrl+Alt+Z
-    if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL) && (mods & GLFW_MOD_ALT)) {
-        do_redo();
+    // Undo: Ctrl+Z (only when no Shift or Alt)
+    if (key == GLFW_KEY_Z && (mods & GLFW_MOD_CONTROL) && !(mods & GLFW_MOD_SHIFT) && !(mods & GLFW_MOD_ALT)) {
+        do_undo();
         return;
     }
 
@@ -873,15 +873,27 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                     confirm_transform();
                 }
                 return;
-            // G during grab = edge slide (GG) in edge mode, else reset to free
+            // G during grab = edge slide (GG) in edge/vertex mode, else reset to free
             case GLFW_KEY_G:
-                if (g_transformMode == 1 && g_uiState.selectMode == rf::SelectMode::Edge && !g_meshes.empty()) {
+                if (g_transformMode == 1 &&
+                    (g_uiState.selectMode == rf::SelectMode::Edge || g_uiState.selectMode == rf::SelectMode::Vertex) &&
+                    !g_meshes.empty()) {
                     // Build edge slide rails
                     auto& mesh = g_meshes[g_selectedMesh];
                     std::set<int> selVertSet(g_grab_vertIdx.begin(), g_grab_vertIdx.end());
+                    // Build set of edges where BOTH endpoints are selected (interior edges)
                     std::set<int> selEdgeSet;
-                    for (int ei = 0; ei < (int)mesh.edges.size(); ei++)
-                        if (mesh.edges[ei].selected) selEdgeSet.insert(ei);
+                    for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                        if (g_uiState.selectMode == rf::SelectMode::Edge && mesh.edges[ei].selected) {
+                            selEdgeSet.insert(ei);
+                        } else if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                            int he = mesh.edges[ei].he;
+                            int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                            int vb = mesh.hedges[he].vertex;
+                            if (selVertSet.count(va) && selVertSet.count(vb))
+                                selEdgeSet.insert(ei);
+                        }
+                    }
 
                     g_edgeSlideData.clear();
                     for (int i = 0; i < (int)g_grab_vertIdx.size(); i++) {
@@ -912,6 +924,22 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                             sv.posB = g_grab_origPos[i];
                         }
                         g_edgeSlideData.push_back(sv);
+                    }
+                    // Ensure consistent rail orientation across all verts
+                    if (g_edgeSlideData.size() >= 2) {
+                        // Use first vertex's railA direction as reference
+                        glm::vec3 refDir = g_edgeSlideData[0].posA - g_edgeSlideData[0].origPos;
+                        if (glm::length(refDir) > 1e-6f) {
+                            refDir = glm::normalize(refDir);
+                            for (int j = 1; j < (int)g_edgeSlideData.size(); j++) {
+                                glm::vec3 dirA = g_edgeSlideData[j].posA - g_edgeSlideData[j].origPos;
+                                if (glm::length(dirA) > 1e-6f) {
+                                    if (glm::dot(glm::normalize(dirA), refDir) < 0.0f) {
+                                        std::swap(g_edgeSlideData[j].posA, g_edgeSlideData[j].posB);
+                                    }
+                                }
+                            }
+                        }
                     }
                     g_transformMode = 4; // edge slide
                     // Reset mouse start
@@ -1424,8 +1452,28 @@ static void update_transform(GLFWwindow* win)
             mesh.verts[g_grab_vertIdx[i]].pos = center + rotated;
         }
     } else if (g_transformMode == 4) {
-        // EDGE SLIDE: mouse Y controls slide factor (-1 to 1)
-        float factor = (float)(my - g_grab_startMY) / 150.0f;
+        // EDGE SLIDE: project mouse onto average rail direction in screen space
+        glm::mat4 mvp = g_projMat * g_viewMat * glm::translate(glm::mat4(1.0f), mesh.position);
+
+        // Compute average rail direction in screen space for consistent slide
+        glm::vec2 avgScreenDir(0.0f);
+        for (auto& sv : g_edgeSlideData) {
+            glm::vec4 cO = mvp * glm::vec4(sv.origPos, 1.0f);
+            glm::vec4 cA = mvp * glm::vec4(sv.posA, 1.0f);
+            if (cO.w > 0.001f && cA.w > 0.001f) {
+                glm::vec2 sO(cO.x / cO.w, cO.y / cO.w);
+                glm::vec2 sA(cA.x / cA.w, cA.y / cA.w);
+                avgScreenDir += sA - sO;
+            }
+        }
+        float dirLen = glm::length(avgScreenDir);
+        if (dirLen > 1e-6f) avgScreenDir /= dirLen;
+        else avgScreenDir = glm::vec2(0.0f, 1.0f);
+
+        // Project mouse delta onto that screen direction
+        glm::vec2 mouseDelta((float)(mx - g_grab_startMX) / (g_vpW * 0.5f),
+                            -(float)(my - g_grab_startMY) / (g_vpH * 0.5f));
+        float factor = glm::dot(mouseDelta, avgScreenDir) / glm::max(dirLen, 0.3f);
         factor = glm::clamp(factor, -1.0f, 1.0f);
 
         for (auto& sv : g_edgeSlideData) {
