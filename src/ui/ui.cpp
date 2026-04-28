@@ -625,7 +625,7 @@ void ui_objects_panel(UIState& state)
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         float th = ImGui::GetTextLineHeight();
-        float rowH = th * 1.8f;
+        float rowH = th * 1.3f;
         ImVec2 listStart = ImGui::GetCursorScreenPos();
         ImGuiViewport* vp2 = ImGui::GetMainViewport();
         float panelBottom = vp2->Pos.y + topBarHeight() + (vp2->Size.y - topBarHeight() - statusBarHeight()) * 0.4f;
@@ -635,22 +635,25 @@ void ui_objects_panel(UIState& state)
         for (float ry = listStart.y; ry < panelBottom; ry += rowH, row++) {
             if (row % 2 == 1) {
                 float rBottom = (ry + rowH < panelBottom) ? ry + rowH : panelBottom;
-                dl->AddRectFilled({winX, ry}, {winX + winW, rBottom}, IM_COL32(255, 255, 255, 10));
+                dl->AddRectFilled({winX, ry}, {winX + winW, rBottom}, IM_COL32(0, 0, 0, 25));
             }
         }
     }
 
     // Object list (Blender-style outliner)
+    ImVec2 listOrigin = ImGui::GetCursorScreenPos();
     if (state.meshes && state.selectedMesh) {
         auto& meshes = *state.meshes;
         int& sel = *state.selectedMesh;
         float panelW = rightPanelWidth() - s(16);
         float th = ImGui::GetTextLineHeight();
-        float rowH = th * 1.8f;
+        float rowH = th * 1.3f;
         float iconBoxSz = th * 1.1f;
 
         for (int i = 0; i < (int)meshes.size(); i++) {
             bool isSelected = (state.objectSelected && *state.objectSelected && i == sel);
+            // Force row to align with stripe grid
+            ImGui::SetCursorScreenPos({listOrigin.x, listOrigin.y + i * rowH});
             ImVec2 rowStart = ImGui::GetCursorScreenPos();
             ImDrawList* dl = ImGui::GetWindowDrawList();
             float y = rowStart.y;
