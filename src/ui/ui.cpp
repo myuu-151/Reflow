@@ -621,40 +621,91 @@ void ui_objects_panel(UIState& state)
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Object list (driven by mesh vector)
+    // Object list (Blender-style outliner)
     if (state.meshes && state.selectedMesh) {
         auto& meshes = *state.meshes;
         int& sel = *state.selectedMesh;
+        float panelW = rightPanelWidth() - s(16);
+        float th = ImGui::GetTextLineHeight();
+        float rowH = th * 1.8f;
+        float iconBoxSz = th * 1.1f;
+
         for (int i = 0; i < (int)meshes.size(); i++) {
             bool isSelected = (state.objectSelected && *state.objectSelected && i == sel);
-            ImVec4 btnCol = isSelected ? ImVec4(0.25f, 0.25f, 0.32f, 1.0f) : ImVec4(0.18f, 0.18f, 0.22f, 1.0f);
-            ImGui::PushStyleColor(ImGuiCol_Button, btnCol);
-            char label[64];
-            snprintf(label, sizeof(label), "%s##obj%d", meshes[i].name.c_str(), i);
-            if (ImGui::Button(label, {rightPanelWidth() - s(43), s(23)})) {
+            ImVec2 rowStart = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float y = rowStart.y;
+            float x = rowStart.x;
+            float cy = y + rowH * 0.5f;
+
+            // Layout positions
+            float arrowX = x + s(6);
+            float iconBoxX = arrowX + s(12);
+            float nameX = iconBoxX + iconBoxSz + s(4);
+            float eyeX = x + panelW - s(18);
+
+            // Invisible buttons first to get hover state
+            ImGui::PushID(i);
+            ImGui::SetCursorScreenPos(rowStart);
+            if (ImGui::InvisibleButton("##row", {panelW - s(22), rowH})) {
                 sel = i;
                 if (state.objectSelected) *state.objectSelected = true;
                 state.pendingFrameSelected = true;
             }
-            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+            bool rowHovered = ImGui::IsItemHovered();
+            if (rowHovered && ImGui::IsMouseDoubleClicked(0))
                 state.pendingZoomSelected = true;
-            }
-            ImGui::PopStyleColor();
 
-            ImGui::SameLine();
-            ImVec4 eyeCol = meshes[i].visible ? Colors::textDim() : ImVec4(0.3f, 0.3f, 0.35f, 0.3f);
-            ImGui::PushStyleColor(ImGuiCol_Text, eyeCol);
-            ImGui::PushStyleColor(ImGuiCol_Button, {0, 0, 0, 0});
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.25f, 0.25f, 0.28f, 1.0f});
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0, 0, 0, 0});
-            if (g_iconFont) ImGui::PushFont(g_iconFont);
-            char eyeId[16]; snprintf(eyeId, sizeof(eyeId), "##eye%d", i);
-            const char* eyeIcon = meshes[i].visible ? "\xEE\xA3\xB4" : "\xEE\xA3\xB5"; // U+E8F4 / U+E8F5
-            if (ImGui::Button(eyeIcon, {s(24), s(24)})) {
+            ImGui::SetCursorScreenPos({eyeX - s(10), y});
+            if (ImGui::InvisibleButton("##eye", {s(22), rowH}))
                 meshes[i].visible = !meshes[i].visible;
+            bool eyeHovered = ImGui::IsItemHovered();
+            ImGui::PopID();
+
+            // Highlight bar (drawn before content)
+            if (isSelected)
+                dl->AddRectFilled(rowStart, {x + panelW, y + rowH}, IM_COL32(50, 70, 120, 255));
+            else if (rowHovered || eyeHovered)
+                dl->AddRectFilled(rowStart, {x + panelW, y + rowH}, IM_COL32(55, 55, 65, 200));
+
+            // ">" arrow
+            ImVec2 arrowTsz = ImGui::CalcTextSize(">");
+            dl->AddText({arrowX, cy - arrowTsz.y * 0.5f}, IM_COL32(128, 128, 135, 255), ">");
+
+            // Cube wireframe icon
+            {
+                float bcx = iconBoxX + iconBoxSz * 0.5f;
+                float bcy = cy;
+                float h = iconBoxSz * 0.38f;
+                float off = h * 0.4f;
+                ImU32 col = isSelected ? IM_COL32(230, 150, 50, 255) : IM_COL32(180, 180, 190, 255);
+                ImVec2 f0 = {bcx - h, bcy - h + off};
+                ImVec2 f1 = {bcx + h - off, bcy - h + off};
+                ImVec2 f2 = {bcx + h - off, bcy + h};
+                ImVec2 b0 = {f0.x + off, f0.y - off};
+                ImVec2 b1 = {f1.x + off, f1.y - off};
+                ImVec2 b2 = {f2.x + off, f2.y - off};
+                dl->AddRect(f0, f2, col, 0, 0, 1.2f);
+                dl->AddLine(f0, b0, col, 1.0f);
+                dl->AddLine(f1, b1, col, 1.0f);
+                dl->AddLine(f2, b2, col, 1.0f);
+                dl->AddLine(b0, b1, col, 1.0f);
+                dl->AddLine(b1, b2, col, 1.0f);
             }
-            if (g_iconFont) ImGui::PopFont();
-            ImGui::PopStyleColor(4);
+
+            // Name
+            ImU32 nameCol = isSelected ? IM_COL32(255, 192, 77, 255) : IM_COL32(217, 217, 222, 255);
+            ImVec2 nameTsz = ImGui::CalcTextSize(meshes[i].name.c_str());
+            dl->AddText({nameX, cy - nameTsz.y * 0.5f}, nameCol, meshes[i].name.c_str());
+
+            // Eye icon
+            if (g_iconFont) {
+                const char* eyeStr = meshes[i].visible ? "\xEE\xA3\xB4" : "\xEE\xA3\xB5";
+                ImU32 eyeCol = meshes[i].visible ? IM_COL32(140, 140, 148, 255) : IM_COL32(77, 77, 89, 100);
+                float eyeFontSz = iconBoxSz * 0.85f;
+                ImVec2 etsz = g_iconFont->CalcTextSizeA(eyeFontSz, FLT_MAX, 0, eyeStr);
+                dl->AddText(g_iconFont, eyeFontSz, {eyeX - etsz.x * 0.5f, cy - etsz.y * 0.5f}, eyeCol, eyeStr);
+            }
         }
     }
 
