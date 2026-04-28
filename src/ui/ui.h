@@ -67,6 +67,10 @@ struct UIState {
     // Specular ramp
     RampInterp specRampInterp = RampInterp::Linear;
     std::vector<std::pair<float,float>> specRampStops = {{0.0f, 0.0f}, {1.0f, 1.0f}};
+
+    // Outliner context menu state
+    int pendingRename = -1;
+    int clipboardMesh = -1;
 };
 
 void ui_init(GLFWwindow* win);

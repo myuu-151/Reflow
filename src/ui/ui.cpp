@@ -677,6 +677,42 @@ void ui_objects_panel(UIState& state)
             bool rowHovered = ImGui::IsItemHovered();
             if (rowHovered && ImGui::IsMouseDoubleClicked(0))
                 state.pendingZoomSelected = true;
+            if (rowHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                sel = i;
+                if (state.objectSelected) *state.objectSelected = true;
+                ImGui::OpenPopup("##OutlinerCtx");
+            }
+
+            if (ImGui::BeginPopup("##OutlinerCtx")) {
+                if (ImGui::MenuItem("Rename")) {
+                    state.pendingRename = i;
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Copy")) {
+                    state.clipboardMesh = i;
+                }
+                if (ImGui::MenuItem("Paste", nullptr, false, state.clipboardMesh >= 0)) {
+                    if (state.clipboardMesh >= 0 && state.clipboardMesh < (int)meshes.size()) {
+                        Mesh copy = meshes[state.clipboardMesh];
+                        copy.name = meshes[state.clipboardMesh].name + ".copy";
+                        copy.vao = copy.vbo = copy.ebo = 0;
+                        copy.wireVao = copy.wireVbo = 0;
+                        copy.rebuild_gpu();
+                        meshes.push_back(std::move(copy));
+                        sel = (int)meshes.size() - 1;
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete")) {
+                    meshes.erase(meshes.begin() + i);
+                    if (sel >= (int)meshes.size()) sel = (int)meshes.size() - 1;
+                    if (meshes.empty() && state.objectSelected) *state.objectSelected = false;
+                    ImGui::EndPopup();
+                    ImGui::PopID();
+                    break;
+                }
+                ImGui::EndPopup();
+            }
 
             ImGui::SetCursorScreenPos({eyeX - s(10), y});
             if (ImGui::InvisibleButton("##eye", {s(22), rowH}))
@@ -719,10 +755,35 @@ void ui_objects_panel(UIState& state)
                 dl->AddLine(b1, b2, col, 1.0f);
             }
 
-            // Name
-            ImU32 nameCol = isSelected ? IM_COL32(255, 192, 77, 255) : IM_COL32(217, 217, 222, 255);
-            ImVec2 nameTsz = ImGui::CalcTextSize(meshes[i].name.c_str());
-            dl->AddText({nameX, cy - nameTsz.y * 0.5f}, nameCol, meshes[i].name.c_str());
+            // Name (inline rename or static text)
+            if (state.pendingRename == i) {
+                static char renameBuf[64] = {};
+                static bool renameInit = false;
+                if (!renameInit) {
+                    snprintf(renameBuf, sizeof(renameBuf), "%s", meshes[i].name.c_str());
+                    renameInit = true;
+                }
+                ImGui::SetCursorScreenPos({nameX, cy - th * 0.5f});
+                ImGui::SetNextItemWidth(panelW - nameX + x - s(30));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.2f, 1.0f));
+                if (ImGui::InputText("##rename", renameBuf, sizeof(renameBuf),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+                    meshes[i].name = renameBuf;
+                    state.pendingRename = -1;
+                    renameInit = false;
+                }
+                if (!ImGui::IsItemActive() && renameInit) {
+                    // Clicked away — cancel
+                    state.pendingRename = -1;
+                    renameInit = false;
+                }
+                if (renameInit) ImGui::SetKeyboardFocusHere(-1);
+                ImGui::PopStyleColor();
+            } else {
+                ImU32 nameCol = isSelected ? IM_COL32(255, 192, 77, 255) : IM_COL32(217, 217, 222, 255);
+                ImVec2 nameTsz = ImGui::CalcTextSize(meshes[i].name.c_str());
+                dl->AddText({nameX, cy - nameTsz.y * 0.5f}, nameCol, meshes[i].name.c_str());
+            }
 
             // Eye icon
             if (g_iconFont) {
