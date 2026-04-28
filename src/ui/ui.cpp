@@ -621,6 +621,25 @@ void ui_objects_panel(UIState& state)
     ImGui::Separator();
     ImGui::Spacing();
 
+    // Draw checkered row stripes across entire panel
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float th = ImGui::GetTextLineHeight();
+        float rowH = th * 1.8f;
+        ImVec2 listStart = ImGui::GetCursorScreenPos();
+        ImGuiViewport* vp2 = ImGui::GetMainViewport();
+        float panelBottom = vp2->Pos.y + topBarHeight() + (vp2->Size.y - topBarHeight() - statusBarHeight()) * 0.4f;
+        float winX = ImGui::GetWindowPos().x;
+        float winW = ImGui::GetWindowSize().x;
+        int row = 0;
+        for (float ry = listStart.y; ry < panelBottom; ry += rowH, row++) {
+            if (row % 2 == 1) {
+                float rBottom = (ry + rowH < panelBottom) ? ry + rowH : panelBottom;
+                dl->AddRectFilled({winX, ry}, {winX + winW, rBottom}, IM_COL32(255, 255, 255, 10));
+            }
+        }
+    }
+
     // Object list (Blender-style outliner)
     if (state.meshes && state.selectedMesh) {
         auto& meshes = *state.meshes;
@@ -661,6 +680,10 @@ void ui_objects_panel(UIState& state)
                 meshes[i].visible = !meshes[i].visible;
             bool eyeHovered = ImGui::IsItemHovered();
             ImGui::PopID();
+
+            // Alternating row background
+            if (i % 2 == 1)
+                dl->AddRectFilled(rowStart, {x + panelW, y + rowH}, IM_COL32(255, 255, 255, 8));
 
             // Highlight bar (drawn before content)
             if (isSelected)
