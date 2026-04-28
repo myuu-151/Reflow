@@ -619,7 +619,6 @@ void ui_objects_panel(UIState& state)
     }
 
     ImGui::Separator();
-    ImGui::Spacing();
 
     // Object list (Blender-style outliner)
     ImVec2 listOrigin = ImGui::GetCursorScreenPos();
