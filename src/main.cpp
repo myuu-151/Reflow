@@ -372,8 +372,9 @@ static void finish_box_select()
             if (!edgeVis) continue;
             glm::vec2 sa = world_to_screen(mesh.verts[va].pos, mvp);
             glm::vec2 sb = world_to_screen(mesh.verts[vb].pos, mvp);
-            glm::vec2 mid = (sa + sb) * 0.5f;
-            if (mid.x >= minX && mid.x <= maxX && mid.y >= minY && mid.y <= maxY)
+            bool aIn = (sa.x >= minX && sa.x <= maxX && sa.y >= minY && sa.y <= maxY);
+            bool bIn = (sb.x >= minX && sb.x <= maxX && sb.y >= minY && sb.y <= maxY);
+            if (aIn || bIn)
                 mesh.edges[i].selected = true;
         }
     } else if (g_uiState.selectMode == rf::SelectMode::Face) {
