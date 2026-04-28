@@ -521,14 +521,22 @@ void ui_objects_panel(UIState& state)
     auto drawCubeIcon = [&](ImVec2 pos, float sz) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         float p = s(2);
-        float x = pos.x + p, y = pos.y + p;
-        float isz = sz - p * 2;
-        float off = isz * 0.22f;
-        dl->AddRect({x, y + off}, {x + isz - off, y + isz}, IM_COL32(200, 200, 205, 255), 0, 0, 1.2f);
-        dl->AddRect({x + off, y}, {x + isz, y + isz - off}, IM_COL32(200, 200, 205, 255), 0, 0, 1.0f);
-        dl->AddLine({x, y + off}, {x + off, y}, IM_COL32(200, 200, 205, 255), 1.0f);
-        dl->AddLine({x + isz - off, y + off}, {x + isz, y}, IM_COL32(200, 200, 205, 255), 1.0f);
-        dl->AddLine({x + isz - off, y + isz}, {x + isz, y + isz - off}, IM_COL32(200, 200, 205, 255), 1.0f);
+        float cx = pos.x + sz * 0.5f, cy = pos.y + sz * 0.5f;
+        float h = (sz - p * 2) * 0.46f;
+        float off = h * 0.4f;
+        ImU32 col = IM_COL32(200, 200, 205, 255);
+        ImVec2 f0 = {cx - h, cy - h + off};
+        ImVec2 f1 = {cx + h - off, cy - h + off};
+        ImVec2 f2 = {cx + h - off, cy + h};
+        ImVec2 b0 = {f0.x + off, f0.y - off};
+        ImVec2 b1 = {f1.x + off, f1.y - off};
+        ImVec2 b2 = {f2.x + off, f2.y - off};
+        dl->AddRect(f0, f2, col, 0, 0, 1.2f);
+        dl->AddLine(f0, b0, col, 1.0f);
+        dl->AddLine(f1, b1, col, 1.0f);
+        dl->AddLine(f2, b2, col, 1.0f);
+        dl->AddLine(b0, b1, col, 1.0f);
+        dl->AddLine(b1, b2, col, 1.0f);
     };
     auto drawSphereIcon = [&](ImVec2 pos, float sz) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1238,12 +1246,25 @@ void ui_properties_panel(UIState& state)
                 float ix = iconPos.x + pad;
                 float iy = iconPos.y + pad;
                 float isz = iconSz - pad * 2;
-                // Simple cube outline icon
-                dl->AddRect({ix, iy}, {ix + isz, iy + isz}, IM_COL32(180, 180, 185, 255), 0, 0, 1.5f);
-                dl->AddRect({ix + isz*0.2f, iy - isz*0.2f}, {ix + isz + isz*0.2f, iy + isz - isz*0.2f}, IM_COL32(180, 180, 185, 255), 0, 0, 1.0f);
-                dl->AddLine({ix, iy}, {ix + isz*0.2f, iy - isz*0.2f}, IM_COL32(180, 180, 185, 255), 1.0f);
-                dl->AddLine({ix + isz, iy}, {ix + isz + isz*0.2f, iy - isz*0.2f}, IM_COL32(180, 180, 185, 255), 1.0f);
-                dl->AddLine({ix + isz, iy + isz}, {ix + isz + isz*0.2f, iy + isz - isz*0.2f}, IM_COL32(180, 180, 185, 255), 1.0f);
+                // Cube wireframe icon (matching outliner style)
+                {
+                    float cx = ix + isz * 0.5f, cy = iy + isz * 0.5f;
+                    float h = isz * 0.5f;
+                    float off = h * 0.4f;
+                    ImU32 col = IM_COL32(180, 180, 185, 255);
+                    ImVec2 f0 = {cx - h, cy - h + off};
+                    ImVec2 f1 = {cx + h - off, cy - h + off};
+                    ImVec2 f2 = {cx + h - off, cy + h};
+                    ImVec2 b0 = {f0.x + off, f0.y - off};
+                    ImVec2 b1 = {f1.x + off, f1.y - off};
+                    ImVec2 b2 = {f2.x + off, f2.y - off};
+                    dl->AddRect(f0, f2, col, 0, 0, 1.2f);
+                    dl->AddLine(f0, b0, col, 1.0f);
+                    dl->AddLine(f1, b1, col, 1.0f);
+                    dl->AddLine(f2, b2, col, 1.0f);
+                    dl->AddLine(b0, b1, col, 1.0f);
+                    dl->AddLine(b1, b2, col, 1.0f);
+                }
 
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + iconSz + s(4));
                 ImGui::Text("%s", mesh.name.c_str());
