@@ -698,7 +698,7 @@ void ui_properties_panel(UIState& state)
                 g_propTab = i;
 
             if (g_propTabTex[i]) {
-                float p = (i == 0) ? padObj : (i == 1) ? padMat : (i == 2) ? s(2) : s(1.5f);
+                float p = (i == 0) ? padObj : (i == 1) ? padMat : (i == 2) ? s(2) : s(3);
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 dl->AddImage((ImTextureID)(intptr_t)g_propTabTex[i],
                     {btnPos.x + p, btnPos.y + p},
