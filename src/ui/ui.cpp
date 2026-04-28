@@ -63,8 +63,8 @@ static GLuint g_selTex[4] = {}; // Object, Vertex, Edge, Face
 static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
 
 // Properties panel tab
-static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers, 3=Data
-static GLuint g_propTabTex[4] = {}; // Object, Material, Modifiers, Data icons
+static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers, 3=Data, 4=Armature
+static GLuint g_propTabTex[5] = {}; // Object, Material, Modifiers, Data, Armature icons
 
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
 static GLuint load_texture(const char* path)
@@ -75,9 +75,10 @@ static GLuint load_texture(const char* path)
     GLuint tex;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glGenerateMipmap(GL_TEXTURE_2D);
     stbi_image_free(px);
     return tex;
 }
@@ -179,8 +180,9 @@ void ui_init(GLFWwindow* win)
         "res/icon_material.png",
         "res/icon_wrench.png",
         "res/icon_data.png",
+        "res/icon_bone.png",
     };
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         std::string path = exe_relative(propTabFiles[i]);
         g_propTabTex[i] = load_texture(path.c_str());
     }
@@ -680,8 +682,8 @@ void ui_properties_panel(UIState& state)
         float iconSz = s(18);
         float padObj = s(3);
         float padMat = s(1.75f);
-        const char* tabLabels[] = {"##PropObj", "##PropMat", "##PropMod", "##PropData"};
-        for (int i = 0; i < 4; i++) {
+        const char* tabLabels[] = {"##PropObj", "##PropMat", "##PropMod", "##PropData", "##PropArm"};
+        for (int i = 0; i < 5; i++) {
             if (i > 0) ImGui::SameLine(0, s(2));
 
             bool active = (g_propTab == i);
@@ -698,7 +700,7 @@ void ui_properties_panel(UIState& state)
                 g_propTab = i;
 
             if (g_propTabTex[i]) {
-                float p = (i == 0) ? padObj : (i == 1) ? padMat : (i == 2) ? s(2) : s(3);
+                float p = (i == 0) ? padObj : (i == 1) ? padMat : (i == 2) ? s(2) : (i == 3) ? s(3) : s(2);
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 dl->AddImage((ImTextureID)(intptr_t)g_propTabTex[i],
                     {btnPos.x + p, btnPos.y + p},
@@ -1193,6 +1195,11 @@ void ui_properties_panel(UIState& state)
             ImGui::Text("No object selected");
             ImGui::PopStyleColor();
         }
+    } else if (g_propTab == 4) {
+        // ---- Armature tab ----
+        ImGui::PushStyleColor(ImGuiCol_Text, Colors::textDim());
+        ImGui::Text("No armature data");
+        ImGui::PopStyleColor();
     }
 
     ImGui::End();
