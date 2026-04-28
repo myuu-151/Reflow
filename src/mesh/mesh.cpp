@@ -1830,6 +1830,531 @@ bool load_project(const std::string& path, std::vector<Mesh>& meshes, UIState* u
 }
 
 // ---------------------------------------------------------------------------
+// Bevel selected edges
+// ---------------------------------------------------------------------------
+std::vector<Mesh::BevelVert> Mesh::bevel_selected_edges(int segments)
+{
+    std::vector<BevelVert> result;
+
+    // Build selected edge set as sorted vertex pairs
+    std::set<std::pair<int,int>> selEdgeSet;
+    for (auto& e : edges) {
+        if (!e.selected) continue;
+        int he = e.he;
+        int a = hedges[hedges[he].prev].vertex;
+        int b = hedges[he].vertex;
+        selEdgeSet.insert({std::min(a,b), std::max(a,b)});
+    }
+    if (selEdgeSet.empty()) return result;
+
+    auto isSelEdge = [&](int a, int b) {
+        return selEdgeSet.count({std::min(a,b), std::max(a,b)}) > 0;
+    };
+
+    // Extract face loops
+    struct FLoop { std::vector<int> v; bool sel; };
+    std::vector<FLoop> oldFaces;
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        std::vector<int> fv;
+        int start = faces[fi].edge;
+        int cur = start;
+        do { fv.push_back(hedges[cur].vertex); cur = hedges[cur].next; }
+        while (cur != start && (int)fv.size() < 64);
+        oldFaces.push_back({fv, faces[fi].selected});
+    }
+
+    // For each vertex in each face, analyze entering/leaving edges
+    // Key: (faceIdx, vertIdx, forEntering) -> new vertex index
+    // forEntering=true: replacement created because the ENTERING edge is selected
+    // forEntering=false: replacement created because the LEAVING edge is selected
+    std::map<std::tuple<int,int,bool>, int> replaceMap;
+
+    auto makeNewVert = [&](int origV, glm::vec3 slideToward) -> int {
+        int newIdx = (int)verts.size();
+        MeshVertex mv;
+        mv.pos = verts[origV].pos;
+        mv.uv = verts[origV].uv;
+        mv.edge = -1;
+        mv.selected = false;
+        verts.push_back(mv);
+
+        glm::vec3 dir = slideToward - verts[origV].pos;
+        float dist = glm::length(dir);
+        BevelVert bv;
+        bv.vertIdx = newIdx;
+        bv.origPos = verts[origV].pos;
+        bv.slideDir = dist > 1e-6f ? dir / dist : glm::vec3(0);
+        bv.maxDist = dist;
+        result.push_back(bv);
+        return newIdx;
+    };
+
+    // Phase 1: Build modified face vertex lists
+    std::vector<FLoop> newFaces;
+
+    for (int fi = 0; fi < (int)oldFaces.size(); fi++) {
+        auto& fv = oldFaces[fi].v;
+        int n = (int)fv.size();
+        std::vector<int> newFV;
+
+        for (int i = 0; i < n; i++) {
+            int v = fv[i];
+            int v_prev = fv[(i + n - 1) % n];
+            int v_next = fv[(i + 1) % n];
+
+            bool enterSel = isSelEdge(v_prev, v);
+            bool leaveSel = isSelEdge(v, v_next);
+
+            if (!enterSel && !leaveSel) {
+                // No selected edge at this vertex - keep unchanged
+                newFV.push_back(v);
+            } else if (enterSel && !leaveSel) {
+                // Entering edge selected: slide from v toward v_next
+                int nv = makeNewVert(v, verts[v_next].pos);
+                replaceMap[{fi, v, true}] = nv;
+                newFV.push_back(nv);
+            } else if (!enterSel && leaveSel) {
+                // Leaving edge selected: slide from v toward v_prev
+                int nv = makeNewVert(v, verts[v_prev].pos);
+                replaceMap[{fi, v, false}] = nv;
+                newFV.push_back(nv);
+            } else {
+                // Both selected: single vertex sliding along bisector
+                glm::vec3 dirPrev = verts[v_prev].pos - verts[v].pos;
+                glm::vec3 dirNext = verts[v_next].pos - verts[v].pos;
+                float lenPrev = glm::length(dirPrev);
+                float lenNext = glm::length(dirNext);
+                glm::vec3 bisector(0);
+                if (lenPrev > 1e-6f) bisector += dirPrev / lenPrev;
+                if (lenNext > 1e-6f) bisector += dirNext / lenNext;
+                float bisLen = glm::length(bisector);
+
+                int newIdx = (int)verts.size();
+                MeshVertex mv;
+                mv.pos = verts[v].pos;
+                mv.uv = verts[v].uv;
+                mv.edge = -1;
+                mv.selected = false;
+                verts.push_back(mv);
+
+                BevelVert bv;
+                bv.vertIdx = newIdx;
+                bv.origPos = verts[v].pos;
+                bv.slideDir = bisLen > 1e-6f ? bisector / bisLen : glm::vec3(0);
+                bv.maxDist = glm::min(lenPrev, lenNext);
+                result.push_back(bv);
+
+                replaceMap[{fi, v, true}] = newIdx;
+                replaceMap[{fi, v, false}] = newIdx;
+                newFV.push_back(newIdx);
+            }
+        }
+
+        newFaces.push_back({newFV, oldFaces[fi].sel});
+    }
+
+    // Phase 2: Build bevel faces for each selected edge
+    std::set<std::pair<int,int>> processedEdges;
+    for (int fi = 0; fi < (int)oldFaces.size(); fi++) {
+        auto& fv = oldFaces[fi].v;
+        int n = (int)fv.size();
+        for (int i = 0; i < n; i++) {
+            int va = fv[i], vb = fv[(i + 1) % n];
+            if (!isSelEdge(va, vb)) continue;
+
+            auto ek = std::make_pair(std::min(va, vb), std::max(va, vb));
+            if (processedEdges.count(ek)) continue;
+            processedEdges.insert(ek);
+
+            // In face fi: edge va→vb
+            // va's leaving edge is selected → replaceMap[fi, va, false]
+            // vb's entering edge is selected → replaceMap[fi, vb, true]
+            auto it_va_fi = replaceMap.find({fi, va, false});
+            auto it_vb_fi = replaceMap.find({fi, vb, true});
+
+            // Find other face containing this edge
+            int fi2 = -1;
+            bool reversed = false;
+            for (int fj = 0; fj < (int)oldFaces.size(); fj++) {
+                if (fj == fi) continue;
+                auto& fv2 = oldFaces[fj].v;
+                int n2 = (int)fv2.size();
+                for (int j = 0; j < n2; j++) {
+                    int ua = fv2[j], ub = fv2[(j + 1) % n2];
+                    if (std::min(ua,ub) == ek.first && std::max(ua,ub) == ek.second) {
+                        fi2 = fj;
+                        reversed = (ua == vb); // edge goes vb→va in fi2
+                        break;
+                    }
+                }
+                if (fi2 >= 0) break;
+            }
+            if (fi2 < 0) continue;
+
+            // In face fi2: the edge might be va→vb or vb→va
+            // If same direction (va→vb): va's leaving, vb's entering
+            // If reversed (vb→va): vb's leaving, va's entering
+            std::tuple<int,int,bool> key_va_fi2, key_vb_fi2;
+            if (!reversed) {
+                key_va_fi2 = {fi2, va, false};
+                key_vb_fi2 = {fi2, vb, true};
+            } else {
+                key_va_fi2 = {fi2, va, true};
+                key_vb_fi2 = {fi2, vb, false};
+            }
+
+            auto it_va_fi2 = replaceMap.find(key_va_fi2);
+            auto it_vb_fi2 = replaceMap.find(key_vb_fi2);
+
+            if (it_va_fi != replaceMap.end() && it_vb_fi != replaceMap.end() &&
+                it_va_fi2 != replaceMap.end() && it_vb_fi2 != replaceMap.end()) {
+                // Bevel quad: fill gap between the two modified faces
+                newFaces.push_back({{it_vb_fi->second, it_va_fi->second,
+                                     it_va_fi2->second, it_vb_fi2->second}, false});
+            }
+        }
+    }
+
+    // Phase 3: Corner faces at vertices where 2+ selected edges meet
+    // Collect which vertices need corners
+    std::map<int, int> vertSelCount; // orig vert -> count of selected edges
+    for (auto& ek : selEdgeSet) {
+        vertSelCount[ek.first]++;
+        vertSelCount[ek.second]++;
+    }
+
+    for (auto& [vi, cnt] : vertSelCount) {
+        if (cnt < 2) continue;
+
+        // Walk the face fan around vertex vi to collect replacement vertices in order
+        // Use half-edge structure to walk around the vertex
+        std::vector<int> cornerVerts;
+
+        // Find a starting half-edge from this vertex
+        int startHE = -1;
+        if (verts[vi].edge >= 0) startHE = verts[vi].edge;
+        if (startHE < 0) continue;
+
+        // Walk around the vertex fan using twin→next
+        int curHE = startHE;
+        int safety = 0;
+        do {
+            // curHE goes FROM vi TO some other vertex
+            int destV = hedges[curHE].vertex;
+            int faceIdx = hedges[curHE].face;
+
+            // Check if edge vi→destV is selected
+            if (isSelEdge(vi, destV) && faceIdx >= 0) {
+                // This is a selected edge leaving vi in face faceIdx
+                // The replacement for the LEAVING selected edge: replaceMap[face, vi, false]
+                auto it = replaceMap.find({faceIdx, vi, false});
+                if (it != replaceMap.end()) cornerVerts.push_back(it->second);
+            }
+
+            // Move to next face: go to twin of prev half-edge
+            int prevHE = hedges[curHE].prev;
+            // prevHE enters vi from some vertex
+            int srcV = hedges[hedges[prevHE].prev].vertex;
+
+            // Check if edge srcV→vi is selected (entering edge)
+            if (isSelEdge(srcV, vi) && faceIdx >= 0) {
+                auto it = replaceMap.find({faceIdx, vi, true});
+                if (it != replaceMap.end()) cornerVerts.push_back(it->second);
+            }
+
+            // Move to next face
+            int twinPrev = hedges[prevHE].twin;
+            if (twinPrev < 0) break;
+            curHE = twinPrev;
+            safety++;
+        } while (curHE != startHE && safety < 64);
+
+        // Remove duplicates while preserving order
+        std::vector<int> unique;
+        std::set<int> seen;
+        for (int v : cornerVerts) {
+            if (seen.insert(v).second) unique.push_back(v);
+        }
+
+        if ((int)unique.size() >= 3) {
+            // Check winding: compute face normal and compare with expected outward direction
+            glm::vec3 center(0);
+            for (int idx : unique) center += verts[idx].pos;
+            center /= (float)unique.size();
+            glm::vec3 outDir = center - verts[vi].pos; // from original vert toward corner face center
+
+            // Compute face normal from first 3 verts
+            glm::vec3 e1 = verts[unique[1]].pos - verts[unique[0]].pos;
+            glm::vec3 e2 = verts[unique[2]].pos - verts[unique[0]].pos;
+            glm::vec3 n = glm::cross(e1, e2);
+
+            // If normal points away from original vertex, winding is correct
+            // Otherwise flip it
+            if (glm::dot(n, outDir) < 0.0f)
+                std::reverse(unique.begin(), unique.end());
+
+            newFaces.push_back({unique, false});
+        }
+    }
+
+    // Rebuild topology from newFaces
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : newFaces) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+        Face f;
+        f.edge = base;
+        f.selected = fl.sel;
+        f.normal = {0, 0, 0};
+        faces.push_back(f);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    // Build edge list
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    // Select bevel edges
+    std::set<int> bevelVertSet;
+    for (auto& bv : result) bevelVertSet.insert(bv.vertIdx);
+    for (int ei = 0; ei < (int)edges.size(); ei++) {
+        int he = edges[ei].he;
+        int va = hedges[hedges[he].prev].vertex;
+        int vb = hedges[he].vertex;
+        if (bevelVertSet.count(va) && bevelVertSet.count(vb))
+            edges[ei].selected = true;
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Vertex bevel: each selected vertex becomes a polygon
+// ---------------------------------------------------------------------------
+std::vector<Mesh::BevelVert> Mesh::bevel_selected_vertices()
+{
+    std::vector<BevelVert> result;
+
+    // Collect vertices to bevel (endpoints of selected edges)
+    std::set<int> selVerts;
+    for (auto& e : edges) {
+        if (!e.selected) continue;
+        int he = e.he;
+        selVerts.insert(hedges[hedges[he].prev].vertex);
+        selVerts.insert(hedges[he].vertex);
+    }
+    if (selVerts.empty()) return result;
+
+    // Extract face loops
+    struct FLoop { std::vector<int> v; bool sel; };
+    std::vector<FLoop> oldFaces;
+    for (int fi = 0; fi < (int)faces.size(); fi++) {
+        std::vector<int> fv;
+        int start = faces[fi].edge;
+        int cur = start;
+        do { fv.push_back(hedges[cur].vertex); cur = hedges[cur].next; }
+        while (cur != start && (int)fv.size() < 64);
+        oldFaces.push_back({fv, faces[fi].selected});
+    }
+
+    // For each selected vertex, for each connected edge, create a new vertex
+    // Key: (origVert, otherVert) -> newVertIdx (vertex on the edge origVert→otherVert)
+    std::map<std::pair<int,int>, int> edgeVertMap;
+
+    for (int vi : selVerts) {
+        // Find all edges connected to vi
+        for (int ei = 0; ei < (int)edges.size(); ei++) {
+            int he = edges[ei].he;
+            int va = hedges[hedges[he].prev].vertex;
+            int vb = hedges[he].vertex;
+            int other = -1;
+            if (va == vi) other = vb;
+            else if (vb == vi) other = va;
+            else continue;
+
+            auto key = std::make_pair(vi, other);
+            if (edgeVertMap.count(key)) continue;
+
+            int newIdx = (int)verts.size();
+            MeshVertex mv;
+            mv.pos = verts[vi].pos;
+            mv.uv = verts[vi].uv;
+            mv.edge = -1;
+            mv.selected = false;
+            verts.push_back(mv);
+            edgeVertMap[key] = newIdx;
+
+            glm::vec3 dir = verts[other].pos - verts[vi].pos;
+            float dist = glm::length(dir);
+            BevelVert bv;
+            bv.vertIdx = newIdx;
+            bv.origPos = verts[vi].pos;
+            bv.slideDir = dist > 1e-6f ? dir / dist : glm::vec3(0);
+            bv.maxDist = dist;
+            result.push_back(bv);
+        }
+    }
+
+    // Build new faces: replace each selected vertex with the appropriate edge vertex
+    std::vector<FLoop> newFaces;
+
+    for (int fi = 0; fi < (int)oldFaces.size(); fi++) {
+        auto& fv = oldFaces[fi].v;
+        int n = (int)fv.size();
+        std::vector<int> newFV;
+
+        for (int i = 0; i < n; i++) {
+            int v = fv[i];
+            if (!selVerts.count(v)) {
+                newFV.push_back(v);
+                continue;
+            }
+
+            // This vertex is being beveled — replace with two new verts
+            // One on the edge from prev→v, one on the edge from v→next
+            int v_prev = fv[(i + n - 1) % n];
+            int v_next = fv[(i + 1) % n];
+
+            auto it_prev = edgeVertMap.find({v, v_prev});
+            auto it_next = edgeVertMap.find({v, v_next});
+
+            if (it_prev != edgeVertMap.end()) newFV.push_back(it_prev->second);
+            if (it_next != edgeVertMap.end()) newFV.push_back(it_next->second);
+        }
+
+        newFaces.push_back({newFV, oldFaces[fi].sel});
+    }
+
+    // Create corner polygon for each selected vertex
+    for (int vi : selVerts) {
+        // Walk half-edge fan to get ordered neighbors
+        std::vector<int> cornerVerts;
+        int startHE = verts[vi].edge;
+        if (startHE < 0) continue;
+
+        int curHE = startHE;
+        int safety = 0;
+        do {
+            int other = hedges[curHE].vertex;
+            auto it = edgeVertMap.find({vi, other});
+            if (it != edgeVertMap.end()) cornerVerts.push_back(it->second);
+
+            // Move to next edge around vertex: twin of prev
+            int prevHE = hedges[curHE].prev;
+            int tw = hedges[prevHE].twin;
+            if (tw < 0) break;
+            curHE = tw;
+            safety++;
+        } while (curHE != startHE && safety < 64);
+
+        if ((int)cornerVerts.size() >= 3) {
+            newFaces.push_back({cornerVerts, false});
+        }
+    }
+
+    // Rebuild topology
+    hedges.clear();
+    faces.clear();
+    edges.clear();
+    for (auto& v : verts) v.edge = -1;
+
+    for (auto& fl : newFaces) {
+        int fi = (int)faces.size();
+        int base = (int)hedges.size();
+        int n = (int)fl.v.size();
+        for (int i = 0; i < n; i++) {
+            HEdge he;
+            he.vertex = fl.v[(i + 1) % n];
+            he.face = fi;
+            he.next = base + (i + 1) % n;
+            he.prev = base + (i + n - 1) % n;
+            he.twin = -1;
+            hedges.push_back(he);
+            verts[fl.v[i]].edge = base + i;
+        }
+        Face f;
+        f.edge = base;
+        f.selected = fl.sel;
+        f.normal = {0, 0, 0};
+        faces.push_back(f);
+    }
+
+    // Link twins
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (hedges[i].twin >= 0) continue;
+        int iTo = hedges[i].vertex;
+        int iFrom = hedges[hedges[i].prev].vertex;
+        for (int j = i + 1; j < (int)hedges.size(); j++) {
+            if (hedges[j].twin >= 0) continue;
+            if (hedges[hedges[j].prev].vertex == iTo && hedges[j].vertex == iFrom) {
+                hedges[i].twin = j;
+                hedges[j].twin = i;
+                break;
+            }
+        }
+    }
+
+    std::vector<bool> visited(hedges.size(), false);
+    for (int i = 0; i < (int)hedges.size(); i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        if (hedges[i].twin >= 0) visited[hedges[i].twin] = true;
+        edges.push_back({i, false});
+    }
+
+    // Select bevel edges
+    std::set<int> bevelVertSet;
+    for (auto& bv : result) bevelVertSet.insert(bv.vertIdx);
+    for (int ei = 0; ei < (int)edges.size(); ei++) {
+        int he = edges[ei].he;
+        int va = hedges[hedges[he].prev].vertex;
+        int vb = hedges[he].vertex;
+        if (bevelVertSet.count(va) && bevelVertSet.count(vb))
+            edges[ei].selected = true;
+    }
+
+    recalc_normals();
+    rebuild_gpu();
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // Subdivide selected faces
 // ---------------------------------------------------------------------------
 void Mesh::subdivide_selected_faces()

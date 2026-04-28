@@ -812,7 +812,7 @@ void ui_properties_panel(UIState& state)
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::Text("PROPERTIES");
+    ImGui::Text("Properties");
     ImGui::Separator();
 
     // Tab icons

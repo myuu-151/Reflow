@@ -113,6 +113,16 @@ struct Mesh {
 
     // Slide: offset shifts all cuts along their edges (-1 to 1 range)
     void slide_verts(const std::vector<SlideVert>& slideData, float offset);
+    // Bevel: returns slide data for the new bevel vertices
+    struct BevelVert {
+        int vertIdx;
+        glm::vec3 origPos;   // position at width=0
+        glm::vec3 slideDir;  // direction to slide (normalized)
+        float maxDist;       // max slide distance
+    };
+    std::vector<BevelVert> bevel_selected_edges(int segments = 1);
+    std::vector<BevelVert> bevel_selected_vertices();
+
     std::vector<int> get_selected_vert_indices() const;
     glm::vec3 get_selection_center() const;
     glm::vec3 get_selected_face_normal() const;

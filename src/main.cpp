@@ -52,6 +52,11 @@ static bool g_openDeleteMenu = false;
 static bool g_openTriMenu = false;
 static rf::Mesh::TriMode g_triMode = rf::Mesh::TriMode::Fixed;
 
+// Bevel state (Ctrl+B)
+static std::vector<rf::Mesh::BevelVert> g_bevelData;
+static bool g_bevelVertexMode = false; // V toggles vertex bevel
+static float g_bevelWidth = 0.0f; // current bevel width for reapply
+
 // Smooth vertices operator state
 static bool g_smoothVertsPanelOpen = false;
 static float g_smoothFactor = 1.0f;
@@ -438,17 +443,23 @@ static void finish_box_select()
 static void cancel_transform()
 {
     if (g_transformMode != 0 && !g_meshes.empty()) {
-        auto& mesh = g_meshes[g_selectedMesh];
-        for (int i = 0; i < (int)g_grab_vertIdx.size(); i++)
-            mesh.verts[g_grab_vertIdx[i]].pos = g_grab_origPos[i];
-        mesh.recalc_normals();
-        mesh.rebuild_gpu();
-        // Remove the undo entry we pushed at start_transform
-        if (!g_undoStack.empty()) g_undoStack.pop_back();
+        if (g_transformMode == 6) {
+            // Bevel changed topology, must do full undo
+            do_undo();
+        } else {
+            auto& mesh = g_meshes[g_selectedMesh];
+            for (int i = 0; i < (int)g_grab_vertIdx.size(); i++)
+                mesh.verts[g_grab_vertIdx[i]].pos = g_grab_origPos[i];
+            mesh.recalc_normals();
+            mesh.rebuild_gpu();
+            // Remove the undo entry we pushed at start_transform
+            if (!g_undoStack.empty()) g_undoStack.pop_back();
+        }
     }
     g_transformMode = 0;
     g_grab_axis = -1;
     g_edgeSlideData.clear();
+    g_bevelData.clear();
 }
 
 static void confirm_transform()
@@ -887,8 +898,28 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             case GLFW_KEY_X: g_grab_axis = (g_grab_axis == 0) ? -1 : 0; return;
             case GLFW_KEY_Y: g_grab_axis = (g_grab_axis == 1) ? -1 : 1; return;
             case GLFW_KEY_Z: g_grab_axis = (g_grab_axis == 2) ? -1 : 2; return;
-            case GLFW_KEY_ESCAPE: cancel_transform(); return;
-            case GLFW_KEY_ENTER: confirm_transform(); return;
+            case GLFW_KEY_ESCAPE: cancel_transform(); g_bevelData.clear(); return;
+            case GLFW_KEY_ENTER: confirm_transform(); g_bevelData.clear(); return;
+            case GLFW_KEY_V:
+                if (g_transformMode == 6 && !g_meshes.empty()) {
+                    g_bevelVertexMode = !g_bevelVertexMode;
+                    // Undo current bevel, re-apply with other mode
+                    do_undo();
+                    push_undo();
+                    auto& mesh = g_meshes[g_selectedMesh];
+                    if (g_bevelVertexMode)
+                        g_bevelData = mesh.bevel_selected_vertices();
+                    else
+                        g_bevelData = mesh.bevel_selected_edges();
+                    // Re-apply current width
+                    for (auto& bv : g_bevelData) {
+                        float clampedW = glm::min(g_bevelWidth, bv.maxDist * 0.49f);
+                        mesh.verts[bv.vertIdx].pos = bv.origPos + bv.slideDir * clampedW;
+                    }
+                    mesh.recalc_normals();
+                    mesh.rebuild_gpu();
+                }
+                return;
             case GLFW_KEY_1:
                 if (g_transformMode == 5 && !g_meshes.empty()) {
                     // Snap spherize to 100%
@@ -1039,6 +1070,38 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                 g_loopCutPreview.clear();
             } else {
                 start_transform(3);
+            }
+            break;
+
+        // Bevel (Ctrl+B)
+        case GLFW_KEY_B:
+            if ((mods & GLFW_MOD_CONTROL) && !g_meshes.empty() &&
+                g_uiState.selectMode != rf::SelectMode::Object &&
+                g_uiState.editorMode == rf::EditorMode::Model) {
+                auto& mesh = g_meshes[g_selectedMesh];
+                // In vertex mode, select edges where both endpoints are selected
+                if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                    for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                        int he = mesh.edges[ei].he;
+                        int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                        int vb = mesh.hedges[he].vertex;
+                        if (mesh.verts[va].selected && mesh.verts[vb].selected)
+                            mesh.edges[ei].selected = true;
+                    }
+                }
+                bool hasSelEdge = false;
+                for (auto& e : mesh.edges) if (e.selected) { hasSelEdge = true; break; }
+                if (hasSelEdge) {
+                    push_undo();
+                    g_bevelVertexMode = false;
+                    g_bevelWidth = 0.0f;
+                    g_bevelData = mesh.bevel_selected_edges();
+                    g_transformMode = 6; // bevel
+                    double mx2, my2;
+                    glfwGetCursorPos(glfwGetCurrentContext(), &mx2, &my2);
+                    g_grab_startMX = mx2;
+                    g_grab_startMY = my2;
+                }
             }
             break;
 
@@ -1543,6 +1606,15 @@ static void update_transform(GLFWwindow* win)
             else
                 spherePos = center + glm::normalize(offset) * radius;
             mesh.verts[g_grab_vertIdx[i]].pos = glm::mix(g_grab_origPos[i], spherePos, factor);
+        }
+    } else if (g_transformMode == 6) {
+        // BEVEL: mouse movement controls width
+        float dist = glm::length(glm::vec2((float)(mx - g_grab_startMX), (float)(my - g_grab_startMY)));
+        g_bevelWidth = dist / 200.0f;
+
+        for (auto& bv : g_bevelData) {
+            float clampedW = glm::min(g_bevelWidth, bv.maxDist * 0.49f);
+            mesh.verts[bv.vertIdx].pos = bv.origPos + bv.slideDir * clampedW;
         }
     }
 
