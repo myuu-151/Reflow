@@ -2015,61 +2015,116 @@ std::vector<Mesh::BevelVert> Mesh::bevel_selected_edges(int segments)
         }
     }
 
-    // Phase 3: Corner faces at vertices where 2+ selected edges meet
-    // Collect which vertices need corners
-    std::map<int, int> vertSelCount; // orig vert -> count of selected edges
+    // Phase 3: Expand non-adjacent faces at bevel endpoints into pentagons
+    // and create corner faces where all surrounding faces have selected edges
+    std::map<int, int> vertSelCount;
     for (auto& ek : selEdgeSet) {
         vertSelCount[ek.first]++;
         vertSelCount[ek.second]++;
     }
 
+    // Phase 3a: Expand non-adjacent faces (vertex is endpoint but no selected edges in this face)
+    for (int fi = 0; fi < (int)oldFaces.size(); fi++) {
+        auto& ofv = oldFaces[fi].v;
+        auto& nfv = newFaces[fi].v;
+        int n_orig = (int)ofv.size();
+        std::vector<int> expanded;
+
+        for (int i = 0; i < (int)nfv.size(); i++) {
+            int v = nfv[i];
+            int origV = ofv[i];
+
+            // If replaced in Phase 1, keep it
+            if (v != origV) { expanded.push_back(v); continue; }
+            // If not an endpoint of any selected edge, keep it
+            if (vertSelCount.count(v) == 0) { expanded.push_back(v); continue; }
+
+            // Find half-edge going TO v in original face fi
+            int heToV = -1;
+            {
+                int cur = faces[fi].edge;
+                for (int s = 0; s < 64; s++) {
+                    if (hedges[cur].vertex == v) { heToV = cur; break; }
+                    cur = hedges[cur].next;
+                }
+            }
+            if (heToV < 0) { expanded.push_back(v); continue; }
+
+            int tw = hedges[heToV].twin;
+            if (tw < 0) { expanded.push_back(v); continue; }
+
+            // Walk fan from adjacent face, collecting bevel vertices until returning to fi
+            std::vector<int> seq;
+            int walkHE = tw;
+            int ws = 0;
+            while (ws < 64) {
+                int wf = hedges[walkHE].face;
+                int dest = hedges[walkHE].vertex;
+
+                if (isSelEdge(v, dest) && wf >= 0) {
+                    auto it = replaceMap.find({wf, v, false});
+                    if (it != replaceMap.end()) seq.push_back(it->second);
+                }
+
+                int prevHE = hedges[walkHE].prev;
+                int src = hedges[hedges[prevHE].prev].vertex;
+                if (isSelEdge(src, v) && wf >= 0) {
+                    auto it = replaceMap.find({wf, v, true});
+                    if (it != replaceMap.end()) seq.push_back(it->second);
+                }
+
+                int twPrev = hedges[prevHE].twin;
+                if (twPrev < 0) break;
+                walkHE = twPrev;
+                ws++;
+
+                if (hedges[walkHE].face == fi) break;
+            }
+
+            // Dedup preserving order and insert
+            std::set<int> seen;
+            bool added = false;
+            for (int bv : seq) {
+                if (seen.insert(bv).second) { expanded.push_back(bv); added = true; }
+            }
+            if (!added) expanded.push_back(v);
+        }
+
+        newFaces[fi].v = expanded;
+    }
+
+    // Phase 3b: Corner faces at vertices where 2+ selected edges meet
     for (auto& [vi, cnt] : vertSelCount) {
         if (cnt < 2) continue;
 
-        // Walk the face fan around vertex vi to collect replacement vertices in order
-        // Use half-edge structure to walk around the vertex
         std::vector<int> cornerVerts;
-
-        // Find a starting half-edge from this vertex
-        int startHE = -1;
-        if (verts[vi].edge >= 0) startHE = verts[vi].edge;
+        int startHE = verts[vi].edge;
         if (startHE < 0) continue;
 
-        // Walk around the vertex fan using twin→next
         int curHE = startHE;
         int safety = 0;
         do {
-            // curHE goes FROM vi TO some other vertex
             int destV = hedges[curHE].vertex;
             int faceIdx = hedges[curHE].face;
 
-            // Check if edge vi→destV is selected
             if (isSelEdge(vi, destV) && faceIdx >= 0) {
-                // This is a selected edge leaving vi in face faceIdx
-                // The replacement for the LEAVING selected edge: replaceMap[face, vi, false]
                 auto it = replaceMap.find({faceIdx, vi, false});
                 if (it != replaceMap.end()) cornerVerts.push_back(it->second);
             }
 
-            // Move to next face: go to twin of prev half-edge
             int prevHE = hedges[curHE].prev;
-            // prevHE enters vi from some vertex
             int srcV = hedges[hedges[prevHE].prev].vertex;
-
-            // Check if edge srcV→vi is selected (entering edge)
             if (isSelEdge(srcV, vi) && faceIdx >= 0) {
                 auto it = replaceMap.find({faceIdx, vi, true});
                 if (it != replaceMap.end()) cornerVerts.push_back(it->second);
             }
 
-            // Move to next face
             int twinPrev = hedges[prevHE].twin;
             if (twinPrev < 0) break;
             curHE = twinPrev;
             safety++;
         } while (curHE != startHE && safety < 64);
 
-        // Remove duplicates while preserving order
         std::vector<int> unique;
         std::set<int> seen;
         for (int v : cornerVerts) {
@@ -2077,20 +2132,23 @@ std::vector<Mesh::BevelVert> Mesh::bevel_selected_edges(int segments)
         }
 
         if ((int)unique.size() >= 3) {
-            // Check winding: compute face normal and compare with expected outward direction
-            glm::vec3 center(0);
-            for (int idx : unique) center += verts[idx].pos;
-            center /= (float)unique.size();
-            glm::vec3 outDir = center - verts[vi].pos; // from original vert toward corner face center
+            glm::vec3 avgNormal(0);
+            int curHE2 = startHE;
+            int s2 = 0;
+            do {
+                int f = hedges[curHE2].face;
+                if (f >= 0) avgNormal += faces[f].normal;
+                int tw2 = hedges[hedges[curHE2].prev].twin;
+                if (tw2 < 0) break;
+                curHE2 = tw2;
+                s2++;
+            } while (curHE2 != startHE && s2 < 64);
 
-            // Compute face normal from first 3 verts
             glm::vec3 e1 = verts[unique[1]].pos - verts[unique[0]].pos;
             glm::vec3 e2 = verts[unique[2]].pos - verts[unique[0]].pos;
             glm::vec3 n = glm::cross(e1, e2);
 
-            // If normal points away from original vertex, winding is correct
-            // Otherwise flip it
-            if (glm::dot(n, outDir) < 0.0f)
+            if (glm::dot(n, avgNormal) < 0.0f)
                 std::reverse(unique.begin(), unique.end());
 
             newFaces.push_back({unique, true});
