@@ -586,7 +586,9 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
 
             auto& mesh = g_meshes[g_selectedMesh];
             bool shift = (mods & GLFW_MOD_SHIFT) != 0;
-            if (!shift) mesh.deselect_all();
+            bool ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+            bool additive = shift || ctrl;
+            if (!additive) mesh.deselect_all();
 
             bool alt = (mods & GLFW_MOD_ALT) != 0;
 
@@ -604,7 +606,7 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
                         }
                     } else {
                         int vi = mesh.pick_vertex(rayO, rayD);
-                        if (vi >= 0) mesh.verts[vi].selected = !mesh.verts[vi].selected || !shift;
+                        if (vi >= 0) mesh.verts[vi].selected = !mesh.verts[vi].selected || !additive;
                     }
                     break;
                 }
@@ -616,14 +618,14 @@ static void cb_mouse_button(GLFWwindow* win, int button, int action, int mods)
                             for (int le : loop)
                                 mesh.edges[le].selected = true;
                         } else {
-                            mesh.edges[ei].selected = !mesh.edges[ei].selected || !shift;
+                            mesh.edges[ei].selected = !mesh.edges[ei].selected || !additive;
                         }
                     }
                     break;
                 }
                 case rf::SelectMode::Face: {
                     int fi = mesh.pick_face(rayO, rayD);
-                    if (fi >= 0) mesh.faces[fi].selected = !mesh.faces[fi].selected || !shift;
+                    if (fi >= 0) mesh.faces[fi].selected = !mesh.faces[fi].selected || !additive;
                     break;
                 }
                 case rf::SelectMode::Object: {
@@ -925,19 +927,22 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                     else
                         g_bevelData = mesh.bevel_selected_edges();
                     // Re-apply current width
-                    float cf = g_bevelVertexMode ? 0.99f : 0.49f;
+                    float cf = 0.99f;
                     float gm = 1e9f;
                     if (g_bevelClamp) {
                         for (int i = 0; i < (int)g_bevelData.size(); i++) {
                             auto& bv = g_bevelData[i];
-                            glm::vec3 target = bv.origPos + bv.slideDir * bv.maxDist;
                             for (int j = i + 1; j < (int)g_bevelData.size(); j++) {
                                 auto& other = g_bevelData[j];
-                                if (glm::length(other.origPos - target) < 1e-4f &&
-                                    glm::length(other.origPos + other.slideDir * other.maxDist - bv.origPos) < 1e-4f) {
-                                    float half = bv.maxDist * 0.5f - 1e-4f;
-                                    if (half < gm) gm = half;
-                                }
+                                float dot = glm::dot(bv.slideDir, other.slideDir);
+                                if (dot > -0.99f) continue;
+                                glm::vec3 between = other.origPos - bv.origPos;
+                                float dist2 = glm::length(between);
+                                if (dist2 < 1e-6f) continue;
+                                float align = glm::dot(between / dist2, bv.slideDir);
+                                if (align < 0.99f) continue;
+                                float half = dist2 * 0.5f - 1e-4f;
+                                if (half < gm) gm = half;
                             }
                         }
                     }
@@ -1669,7 +1674,7 @@ static void update_transform(GLFWwindow* win)
         // BEVEL: mouse movement controls width
         float dist = glm::length(glm::vec2((float)(mx - g_grab_startMX), (float)(my - g_grab_startMY)));
         g_bevelWidth = dist / 200.0f;
-        float clampFactor = g_bevelVertexMode ? 0.99f : 0.49f;
+        float clampFactor = 0.99f;
 
         // When clamped, find the tightest limit across all opposing pairs
         // and apply it globally so all verts stop together
@@ -1677,14 +1682,19 @@ static void update_transform(GLFWwindow* win)
         if (g_bevelClamp) {
             for (int i = 0; i < (int)g_bevelData.size(); i++) {
                 auto& bv = g_bevelData[i];
-                glm::vec3 target = bv.origPos + bv.slideDir * bv.maxDist;
                 for (int j = i + 1; j < (int)g_bevelData.size(); j++) {
                     auto& other = g_bevelData[j];
-                    if (glm::length(other.origPos - target) < 1e-4f &&
-                        glm::length(other.origPos + other.slideDir * other.maxDist - bv.origPos) < 1e-4f) {
-                        float half = bv.maxDist * 0.5f - 1e-4f;
-                        if (half < globalMax) globalMax = half;
-                    }
+                    // Check if they slide toward each other on the same edge
+                    float dot = glm::dot(bv.slideDir, other.slideDir);
+                    if (dot > -0.99f) continue; // not anti-parallel
+                    glm::vec3 between = other.origPos - bv.origPos;
+                    float dist2 = glm::length(between);
+                    if (dist2 < 1e-6f) continue;
+                    float align = glm::dot(between / dist2, bv.slideDir);
+                    if (align < 0.99f) continue; // not collinear
+                    // They share an edge segment of length dist2, each gets half
+                    float half = dist2 * 0.5f - 1e-4f;
+                    if (half < globalMax) globalMax = half;
                 }
             }
         }
