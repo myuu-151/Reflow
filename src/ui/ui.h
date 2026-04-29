@@ -46,6 +46,7 @@ struct UIState {
     bool pendingFrameSelected = false;
     bool pendingZoomSelected = false;
     int pendingSelectMesh = -1;    // request to select mesh by index
+    bool outlinerHovered = false; // outliner panel is hovered (set each frame)
 
     // Pointers to scene data (set by main)
     std::vector<Mesh>* meshes = nullptr;

@@ -1290,7 +1290,7 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
 
         // X = delete menu
         case GLFW_KEY_X:
-            if (!g_meshes.empty()) {
+            if (!g_meshes.empty() && !g_uiState.outlinerHovered) {
                 if (g_uiState.selectMode == rf::SelectMode::Object && g_objectSelected)
                     g_openDeleteConfirm = true;
                 else if (g_uiState.selectMode != rf::SelectMode::Object)

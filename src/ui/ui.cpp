@@ -66,6 +66,7 @@ static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
 static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers, 3=Data, 4=Armature, 5=Light
 static GLuint g_propTabTex[6] = {}; // Object, Material, Modifiers, Data, Armature, Light icons
 static GLuint g_icoTex = 0; // Icosphere icon texture
+static GLuint g_sphereTex = 0; // Sphere icon texture
 
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
 static GLuint load_texture(const char* path, bool invertAlpha = false)
@@ -218,6 +219,7 @@ void ui_init(GLFWwindow* win)
         g_propTabTex[i] = load_texture(path.c_str());
     }
     g_icoTex = load_texture(exe_relative("res/icosphere.png").c_str(), true);
+    g_sphereTex = load_texture(exe_relative("res/sphere.png").c_str(), true);
 }
 
 void ui_shutdown()
@@ -573,14 +575,12 @@ void ui_objects_panel(UIState& state)
         dl->AddLine(b1, b2, col, 1.0f);
     };
     auto drawSphereIcon = [&](ImVec2 pos, float sz) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        float cx = pos.x + sz * 0.5f, cy = pos.y + sz * 0.5f;
-        float r = sz * 0.38f;
-        dl->AddCircle({cx, cy}, r, IM_COL32(200, 200, 205, 255), 24, 1.2f);
-        // Horizontal ellipse
-        dl->AddEllipse({cx, cy}, {r, r * 0.35f}, IM_COL32(200, 200, 205, 130), 0, 20, 1.0f);
-        // Vertical ellipse
-        dl->AddEllipse({cx, cy}, {r * 0.35f, r}, IM_COL32(200, 200, 205, 130), 0, 20, 1.0f);
+        if (g_sphereTex) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float pad = sz * 0.12f;
+            dl->AddImage((ImTextureID)(intptr_t)g_sphereTex,
+                {pos.x + pad, pos.y + pad}, {pos.x + sz - pad, pos.y + sz - pad});
+        }
     };
     auto drawIcosphereIcon = [&](ImVec2 pos, float sz) {
         if (g_icoTex) {
@@ -768,10 +768,9 @@ void ui_objects_panel(UIState& state)
                     }
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete")) {
+                if (ImGui::MenuItem("Delete", nullptr, false, meshes.size() > 1)) {
                     meshes.erase(meshes.begin() + i);
                     if (sel >= (int)meshes.size()) sel = (int)meshes.size() - 1;
-                    if (meshes.empty() && state.objectSelected) *state.objectSelected = false;
                     ImGui::EndPopup();
                     ImGui::PopStyleColor(2);
                     ImGui::PopID();
@@ -800,25 +799,46 @@ void ui_objects_panel(UIState& state)
             ImVec2 arrowTsz = ImGui::CalcTextSize(">");
             dl->AddText({arrowX, cy - arrowTsz.y * 0.5f}, IM_COL32(128, 128, 135, 255), ">");
 
-            // Cube wireframe icon
+            // Mesh type icon
             {
-                float bcx = iconBoxX + iconBoxSz * 0.5f;
-                float bcy = cy;
-                float h = iconBoxSz * 0.38f;
-                float off = h * 0.4f;
+                const std::string& mname = meshes[i].name;
                 ImU32 col = isSelected ? IM_COL32(230, 150, 50, 255) : IM_COL32(180, 180, 190, 255);
-                ImVec2 f0 = {bcx - h, bcy - h + off};
-                ImVec2 f1 = {bcx + h - off, bcy - h + off};
-                ImVec2 f2 = {bcx + h - off, bcy + h};
-                ImVec2 b0 = {f0.x + off, f0.y - off};
-                ImVec2 b1 = {f1.x + off, f1.y - off};
-                ImVec2 b2 = {f2.x + off, f2.y - off};
-                dl->AddRect(f0, f2, col, 0, 0, 1.2f);
-                dl->AddLine(f0, b0, col, 1.0f);
-                dl->AddLine(f1, b1, col, 1.0f);
-                dl->AddLine(f2, b2, col, 1.0f);
-                dl->AddLine(b0, b1, col, 1.0f);
-                dl->AddLine(b1, b2, col, 1.0f);
+                ImVec4 tint = isSelected ? ImVec4(0.90f, 0.59f, 0.20f, 1.0f) : ImVec4(0.71f, 0.71f, 0.75f, 1.0f);
+                if (mname.rfind("Sphere", 0) == 0 && g_sphereTex) {
+                    float pad = iconBoxSz * 0.12f;
+                    dl->AddImage((ImTextureID)(intptr_t)g_sphereTex,
+                        {iconBoxX + pad, cy - iconBoxSz * 0.5f + pad},
+                        {iconBoxX + iconBoxSz - pad, cy + iconBoxSz * 0.5f - pad},
+                        {0,0}, {1,1}, ImGui::ColorConvertFloat4ToU32(tint));
+                } else if (mname.rfind("Icosphere", 0) == 0 && g_icoTex) {
+                    float pad = iconBoxSz * 0.07f;
+                    dl->AddImage((ImTextureID)(intptr_t)g_icoTex,
+                        {iconBoxX + pad, cy - iconBoxSz * 0.5f + pad},
+                        {iconBoxX + iconBoxSz - pad, cy + iconBoxSz * 0.5f - pad},
+                        {0,0}, {1,1}, ImGui::ColorConvertFloat4ToU32(tint));
+                } else if (mname.rfind("Plane", 0) == 0) {
+                    float p = iconBoxSz * 0.22f;
+                    dl->AddRect({iconBoxX + p, cy - iconBoxSz * 0.5f + p},
+                                {iconBoxX + iconBoxSz - p, cy + iconBoxSz * 0.5f - p}, col, 0, 0, 1.2f);
+                } else {
+                    // Default: cube wireframe
+                    float bcx = iconBoxX + iconBoxSz * 0.5f;
+                    float bcy = cy;
+                    float h = iconBoxSz * 0.35f;
+                    float off = h * 0.4f;
+                    ImVec2 f0 = {bcx - h, bcy - h + off};
+                    ImVec2 f1 = {bcx + h - off, bcy - h + off};
+                    ImVec2 f2 = {bcx + h - off, bcy + h};
+                    ImVec2 b0 = {f0.x + off, f0.y - off};
+                    ImVec2 b1 = {f1.x + off, f1.y - off};
+                    ImVec2 b2 = {f2.x + off, f2.y - off};
+                    dl->AddRect(f0, f2, col, 0, 0, 1.2f);
+                    dl->AddLine(f0, b0, col, 1.0f);
+                    dl->AddLine(f1, b1, col, 1.0f);
+                    dl->AddLine(f2, b2, col, 1.0f);
+                    dl->AddLine(b0, b1, col, 1.0f);
+                    dl->AddLine(b1, b2, col, 1.0f);
+                }
             }
 
             // Name (inline rename or static text)
@@ -862,11 +882,11 @@ void ui_objects_panel(UIState& state)
         }
 
         // X key deletes selected object when outliner is hovered
-        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
-            ImGui::IsKeyPressed(ImGuiKey_X) && !meshes.empty() && sel >= 0 && sel < (int)meshes.size()) {
+        state.outlinerHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+        if (state.outlinerHovered &&
+            ImGui::IsKeyPressed(ImGuiKey_X) && meshes.size() > 1 && sel >= 0 && sel < (int)meshes.size()) {
             meshes.erase(meshes.begin() + sel);
             if (sel >= (int)meshes.size()) sel = (int)meshes.size() - 1;
-            if (meshes.empty() && state.objectSelected) *state.objectSelected = false;
         }
     }
 
