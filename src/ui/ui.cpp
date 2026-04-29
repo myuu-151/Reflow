@@ -65,13 +65,43 @@ static GLuint g_viewModeTex[3] = {}; // Wireframe, Solid, Textured
 // Properties panel tab
 static int g_propTab = 0; // 0=Object, 1=Material, 2=Modifiers, 3=Data, 4=Armature, 5=Light
 static GLuint g_propTabTex[6] = {}; // Object, Material, Modifiers, Data, Armature, Light icons
+static GLuint g_icoTex = 0; // Icosphere icon texture
 
 // Load a PNG as an OpenGL texture, returns texture ID (0 on failure)
-static GLuint load_texture(const char* path)
+static GLuint load_texture(const char* path, bool invertAlpha = false)
 {
     int w, h, ch;
     unsigned char* px = stbi_load(path, &w, &h, &ch, 4);
     if (!px) return 0;
+    // invertAlpha: process icon image — downscale to 64px and boost alpha
+    if (invertAlpha) {
+        int tgt = 64;
+        int block = w / tgt;
+        if (block < 1) block = 1;
+        unsigned char* out = (unsigned char*)malloc(tgt * tgt * 4);
+        for (int ty = 0; ty < tgt; ty++) {
+            for (int tx = 0; tx < tgt; tx++) {
+                // Area-average the block, taking max alpha to preserve thin lines
+                int maxA = 0;
+                for (int by = 0; by < block; by++) {
+                    for (int bx = 0; bx < block; bx++) {
+                        int sx = tx * block + bx, sy = ty * block + by;
+                        if (sx < w && sy < h) {
+                            int a = px[(sy * w + sx) * 4 + 3];
+                            if (a > maxA) maxA = a;
+                        }
+                    }
+                }
+                unsigned char* p = out + (ty * tgt + tx) * 4;
+                p[0] = p[1] = p[2] = 200;
+                // Boost: clamp to full opacity if any pixel in block had alpha
+                p[3] = maxA > 10 ? 255 : 0;
+            }
+        }
+        stbi_image_free(px);
+        px = out;
+        w = h = tgt;
+    }
     GLuint tex;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -187,6 +217,7 @@ void ui_init(GLFWwindow* win)
         std::string path = exe_relative(propTabFiles[i]);
         g_propTabTex[i] = load_texture(path.c_str());
     }
+    g_icoTex = load_texture(exe_relative("res/icosphere.png").c_str(), true);
 }
 
 void ui_shutdown()
@@ -517,6 +548,9 @@ void ui_objects_panel(UIState& state)
     static int s_sphereSegments = 16;
     static bool s_showSphereParams = false;
     static int s_sphereIdx = -1;
+    static int s_icoSubdivisions = 2;
+    static bool s_showIcoParams = false;
+    static int s_icoIdx = -1;
     // Helper lambdas for primitive icons in popup
     auto drawCubeIcon = [&](ImVec2 pos, float sz) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -547,6 +581,14 @@ void ui_objects_panel(UIState& state)
         dl->AddEllipse({cx, cy}, {r, r * 0.35f}, IM_COL32(200, 200, 205, 130), 0, 20, 1.0f);
         // Vertical ellipse
         dl->AddEllipse({cx, cy}, {r * 0.35f, r}, IM_COL32(200, 200, 205, 130), 0, 20, 1.0f);
+    };
+    auto drawIcosphereIcon = [&](ImVec2 pos, float sz) {
+        if (g_icoTex) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float pad = sz * 0.05f;
+            dl->AddImage((ImTextureID)(intptr_t)g_icoTex,
+                {pos.x + pad, pos.y + pad}, {pos.x + sz - pad, pos.y + sz - pad});
+        }
     };
     auto drawPlaneIcon = [&](ImVec2 pos, float sz) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -587,6 +629,20 @@ void ui_objects_panel(UIState& state)
             }
             drawSphereIcon(cpos, iconSz);
 
+            // Icosphere
+            cpos = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + iconSz + s(4));
+            if (ImGui::MenuItem("Icosphere")) {
+                s_icoSubdivisions = 2;
+                auto ico = Mesh::create_icosphere(s_icoSubdivisions);
+                state.meshes->push_back(std::move(ico));
+                s_icoIdx = (int)state.meshes->size() - 1;
+                *state.selectedMesh = s_icoIdx;
+                *state.objectSelected = true;
+                s_showIcoParams = true;
+            }
+            drawIcosphereIcon(cpos, iconSz);
+
             // Plane
             cpos = ImGui::GetCursorScreenPos();
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + iconSz + s(4));
@@ -624,6 +680,25 @@ void ui_objects_panel(UIState& state)
         ImGui::EndPopup();
     } else {
         s_sphereIdx = -1; // popup closed, stop tracking
+    }
+    if (s_showIcoParams)
+        ImGui::OpenPopup("##IcoParams");
+    if (ImGui::BeginPopup("##IcoParams")) {
+        s_showIcoParams = false;
+        ImGui::Text("Icosphere");
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(s(50));
+        bool changed = ImGui::InputInt("Subdivisions", &s_icoSubdivisions, 0);
+        if (s_icoSubdivisions < 0) s_icoSubdivisions = 0;
+        if (s_icoSubdivisions > 6) s_icoSubdivisions = 6;
+        if (changed && state.meshes && s_icoIdx >= 0 && s_icoIdx < (int)state.meshes->size()) {
+            auto ico = Mesh::create_icosphere(s_icoSubdivisions);
+            ico.position = (*state.meshes)[s_icoIdx].position;
+            (*state.meshes)[s_icoIdx] = std::move(ico);
+        }
+        ImGui::EndPopup();
+    } else {
+        s_icoIdx = -1;
     }
 
     ImGui::Separator();

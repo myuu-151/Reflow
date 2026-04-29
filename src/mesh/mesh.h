@@ -74,6 +74,7 @@ struct Mesh {
     static Mesh create_plane(float size = 1.0f);
     static Mesh create_cylinder(int segments = 8, float radius = 0.5f, float height = 1.0f);
     static Mesh create_sphere(int rings = 4, int segments = 8, float radius = 0.5f);
+    static Mesh create_icosphere(int subdivisions = 2, float radius = 0.5f);
     static Mesh create_cone(int segments = 8, float radius = 0.5f, float height = 1.0f);
 
     // Export

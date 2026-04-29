@@ -338,6 +338,82 @@ Mesh Mesh::create_sphere(int rings, int segments, float radius)
 }
 
 // ---------------------------------------------------------------------------
+// Icosphere
+// ---------------------------------------------------------------------------
+Mesh Mesh::create_icosphere(int subdivisions, float radius)
+{
+    Mesh m;
+    m.name = "Icosphere";
+    m.shadeSmooth = true;
+
+    // Golden ratio
+    const float t = (1.0f + sqrtf(5.0f)) / 2.0f;
+
+    // 12 base icosahedron vertices (normalized to unit sphere)
+    glm::vec3 baseVerts[] = {
+        {-1,  t,  0}, { 1,  t,  0}, {-1, -t,  0}, { 1, -t,  0},
+        { 0, -1,  t}, { 0,  1,  t}, { 0, -1, -t}, { 0,  1, -t},
+        { t,  0, -1}, { t,  0,  1}, {-t,  0, -1}, {-t,  0,  1}
+    };
+    for (auto& v : baseVerts) v = glm::normalize(v);
+
+    // Working vertex list
+    std::vector<glm::vec3> vpos;
+    for (auto& v : baseVerts) vpos.push_back(v);
+
+    // 20 base triangles
+    struct Tri { int a, b, c; };
+    std::vector<Tri> tris = {
+        {0,11,5}, {0,5,1}, {0,1,7}, {0,7,10}, {0,10,11},
+        {1,5,9}, {5,11,4}, {11,10,2}, {10,7,6}, {7,1,8},
+        {3,9,4}, {3,4,2}, {3,2,6}, {3,6,8}, {3,8,9},
+        {4,9,5}, {2,4,11}, {6,2,10}, {8,6,7}, {9,8,1}
+    };
+
+    // Subdivide
+    std::map<std::pair<int,int>, int> midCache;
+    auto getMid = [&](int a, int b) -> int {
+        auto key = std::make_pair(std::min(a,b), std::max(a,b));
+        auto it = midCache.find(key);
+        if (it != midCache.end()) return it->second;
+        int idx = (int)vpos.size();
+        vpos.push_back(glm::normalize((vpos[a] + vpos[b]) * 0.5f));
+        midCache[key] = idx;
+        return idx;
+    };
+
+    for (int s = 0; s < subdivisions; s++) {
+        std::vector<Tri> newTris;
+        midCache.clear();
+        for (auto& tri : tris) {
+            int ab = getMid(tri.a, tri.b);
+            int bc = getMid(tri.b, tri.c);
+            int ca = getMid(tri.c, tri.a);
+            newTris.push_back({tri.a, ab, ca});
+            newTris.push_back({tri.b, bc, ab});
+            newTris.push_back({tri.c, ca, bc});
+            newTris.push_back({ab, bc, ca});
+        }
+        tris = std::move(newTris);
+    }
+
+    // Build mesh
+    for (auto& p : vpos) {
+        glm::vec3 pos = p * radius;
+        float u = 0.5f + atan2f(p.z, p.x) / (2.0f * 3.14159265f);
+        float v = 0.5f + asinf(glm::clamp(p.y, -1.0f, 1.0f)) / 3.14159265f;
+        m.verts.push_back({pos, {u, v}, -1, false});
+    }
+    for (auto& tri : tris)
+        add_tri(m, tri.a, tri.b, tri.c);
+
+    link_twins(m);
+    m.recalc_normals();
+    m.rebuild_gpu();
+    return m;
+}
+
+// ---------------------------------------------------------------------------
 // OBJ export
 // ---------------------------------------------------------------------------
 bool Mesh::export_obj(const std::string& path) const
