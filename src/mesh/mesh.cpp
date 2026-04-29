@@ -129,9 +129,17 @@ void Mesh::recalc_normals()
         } while (cur != start && (int)fv.size() < 64);
 
         if (fv.size() >= 3) {
-            glm::vec3 a = verts[fv[1]].pos - verts[fv[0]].pos;
-            glm::vec3 b = verts[fv[2]].pos - verts[fv[0]].pos;
-            f.normal = glm::normalize(glm::cross(a, b));
+            // Newell's method: robust for degenerate/coincident vertices
+            glm::vec3 n(0);
+            for (int i = 0; i < (int)fv.size(); i++) {
+                auto& cur = verts[fv[i]].pos;
+                auto& nxt = verts[fv[(i + 1) % fv.size()]].pos;
+                n.x += (cur.y - nxt.y) * (cur.z + nxt.z);
+                n.y += (cur.z - nxt.z) * (cur.x + nxt.x);
+                n.z += (cur.x - nxt.x) * (cur.y + nxt.y);
+            }
+            float len = glm::length(n);
+            f.normal = len > 1e-12f ? n / len : glm::vec3(0, 0, 0);
         }
     }
 }
@@ -2229,14 +2237,10 @@ std::vector<Mesh::BevelVert> Mesh::bevel_selected_vertices()
 {
     std::vector<BevelVert> result;
 
-    // Collect vertices to bevel (endpoints of selected edges)
+    // Collect vertices to bevel (directly from vertex selection)
     std::set<int> selVerts;
-    for (auto& e : edges) {
-        if (!e.selected) continue;
-        int he = e.he;
-        selVerts.insert(hedges[hedges[he].prev].vertex);
-        selVerts.insert(hedges[he].vertex);
-    }
+    for (int i = 0; i < (int)verts.size(); i++)
+        if (verts[i].selected) selVerts.insert(i);
     if (selVerts.empty()) return result;
 
     // Extract face loops

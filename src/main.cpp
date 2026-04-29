@@ -55,6 +55,7 @@ static rf::Mesh::TriMode g_triMode = rf::Mesh::TriMode::Fixed;
 // Bevel state (Ctrl+B)
 static std::vector<rf::Mesh::BevelVert> g_bevelData;
 static bool g_bevelVertexMode = false; // V toggles vertex bevel
+static bool g_bevelClamp = false; // C toggles clamp (verts stop at each other)
 static float g_bevelWidth = 0.0f; // current bevel width for reapply
 
 // Smooth vertices operator state
@@ -907,6 +908,11 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             case GLFW_KEY_Z: g_grab_axis = (g_grab_axis == 2) ? -1 : 2; return;
             case GLFW_KEY_ESCAPE: cancel_transform(); g_bevelData.clear(); return;
             case GLFW_KEY_ENTER: confirm_transform(); g_bevelData.clear(); return;
+            case GLFW_KEY_C:
+                if (g_transformMode == 6) {
+                    g_bevelClamp = !g_bevelClamp;
+                }
+                return;
             case GLFW_KEY_V:
                 if (g_transformMode == 6 && !g_meshes.empty()) {
                     g_bevelVertexMode = !g_bevelVertexMode;
@@ -919,8 +925,26 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
                     else
                         g_bevelData = mesh.bevel_selected_edges();
                     // Re-apply current width
+                    float cf = g_bevelVertexMode ? 0.99f : 0.49f;
+                    float gm = 1e9f;
+                    if (g_bevelClamp) {
+                        for (int i = 0; i < (int)g_bevelData.size(); i++) {
+                            auto& bv = g_bevelData[i];
+                            glm::vec3 target = bv.origPos + bv.slideDir * bv.maxDist;
+                            for (int j = i + 1; j < (int)g_bevelData.size(); j++) {
+                                auto& other = g_bevelData[j];
+                                if (glm::length(other.origPos - target) < 1e-4f &&
+                                    glm::length(other.origPos + other.slideDir * other.maxDist - bv.origPos) < 1e-4f) {
+                                    float half = bv.maxDist * 0.5f - 1e-4f;
+                                    if (half < gm) gm = half;
+                                }
+                            }
+                        }
+                    }
                     for (auto& bv : g_bevelData) {
-                        float clampedW = glm::min(g_bevelWidth, bv.maxDist * 0.49f);
+                        float maxW = bv.maxDist * cf;
+                        if (g_bevelClamp && gm < maxW) maxW = gm;
+                        float clampedW = glm::min(g_bevelWidth, maxW);
                         mesh.verts[bv.vertIdx].pos = bv.origPos + bv.slideDir * clampedW;
                     }
                     mesh.recalc_normals();
@@ -1080,34 +1104,61 @@ static void cb_key(GLFWwindow* win, int key, int, int action, int mods)
             }
             break;
 
-        // Bevel (Ctrl+B)
+        // Bevel (Ctrl+B = edge bevel, Shift+Ctrl+B = vertex bevel)
         case GLFW_KEY_B:
             if ((mods & GLFW_MOD_CONTROL) && !g_meshes.empty() &&
                 g_uiState.selectMode != rf::SelectMode::Object &&
                 g_uiState.editorMode == rf::EditorMode::Model) {
                 auto& mesh = g_meshes[g_selectedMesh];
-                // In vertex mode, select edges where both endpoints are selected
-                if (g_uiState.selectMode == rf::SelectMode::Vertex) {
-                    for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
-                        int he = mesh.edges[ei].he;
-                        int va = mesh.hedges[mesh.hedges[he].prev].vertex;
-                        int vb = mesh.hedges[he].vertex;
-                        if (mesh.verts[va].selected && mesh.verts[vb].selected)
-                            mesh.edges[ei].selected = true;
+                bool vertexBevel = (mods & GLFW_MOD_SHIFT) != 0;
+
+                if (vertexBevel) {
+                    // Vertex bevel: need selected vertices (or verts from selected edges)
+                    bool hasSelVert = false;
+                    if (g_uiState.selectMode == rf::SelectMode::Edge) {
+                        for (auto& e : mesh.edges) {
+                            if (!e.selected) continue;
+                            int he = e.he;
+                            mesh.verts[mesh.hedges[mesh.hedges[he].prev].vertex].selected = true;
+                            mesh.verts[mesh.hedges[he].vertex].selected = true;
+                        }
                     }
-                }
-                bool hasSelEdge = false;
-                for (auto& e : mesh.edges) if (e.selected) { hasSelEdge = true; break; }
-                if (hasSelEdge) {
-                    push_undo();
-                    g_bevelVertexMode = false;
-                    g_bevelWidth = 0.0f;
-                    g_bevelData = mesh.bevel_selected_edges();
-                    g_transformMode = 6; // bevel
-                    double mx2, my2;
-                    glfwGetCursorPos(glfwGetCurrentContext(), &mx2, &my2);
-                    g_grab_startMX = mx2;
-                    g_grab_startMY = my2;
+                    for (auto& v : mesh.verts) if (v.selected) { hasSelVert = true; break; }
+                    if (hasSelVert) {
+                        push_undo();
+                        g_bevelVertexMode = true;
+                        g_bevelWidth = 0.0f;
+                        g_bevelData = mesh.bevel_selected_vertices();
+                        g_transformMode = 6;
+                        double mx2, my2;
+                        glfwGetCursorPos(glfwGetCurrentContext(), &mx2, &my2);
+                        g_grab_startMX = mx2;
+                        g_grab_startMY = my2;
+                    }
+                } else {
+                    // Edge bevel: in vertex mode, select edges where both endpoints are selected
+                    if (g_uiState.selectMode == rf::SelectMode::Vertex) {
+                        for (int ei = 0; ei < (int)mesh.edges.size(); ei++) {
+                            int he = mesh.edges[ei].he;
+                            int va = mesh.hedges[mesh.hedges[he].prev].vertex;
+                            int vb = mesh.hedges[he].vertex;
+                            if (mesh.verts[va].selected && mesh.verts[vb].selected)
+                                mesh.edges[ei].selected = true;
+                        }
+                    }
+                    bool hasSelEdge = false;
+                    for (auto& e : mesh.edges) if (e.selected) { hasSelEdge = true; break; }
+                    if (hasSelEdge) {
+                        push_undo();
+                        g_bevelVertexMode = false;
+                        g_bevelWidth = 0.0f;
+                        g_bevelData = mesh.bevel_selected_edges();
+                        g_transformMode = 6;
+                        double mx2, my2;
+                        glfwGetCursorPos(glfwGetCurrentContext(), &mx2, &my2);
+                        g_grab_startMX = mx2;
+                        g_grab_startMY = my2;
+                    }
                 }
             }
             break;
@@ -1618,9 +1669,30 @@ static void update_transform(GLFWwindow* win)
         // BEVEL: mouse movement controls width
         float dist = glm::length(glm::vec2((float)(mx - g_grab_startMX), (float)(my - g_grab_startMY)));
         g_bevelWidth = dist / 200.0f;
+        float clampFactor = g_bevelVertexMode ? 0.99f : 0.49f;
+
+        // When clamped, find the tightest limit across all opposing pairs
+        // and apply it globally so all verts stop together
+        float globalMax = 1e9f;
+        if (g_bevelClamp) {
+            for (int i = 0; i < (int)g_bevelData.size(); i++) {
+                auto& bv = g_bevelData[i];
+                glm::vec3 target = bv.origPos + bv.slideDir * bv.maxDist;
+                for (int j = i + 1; j < (int)g_bevelData.size(); j++) {
+                    auto& other = g_bevelData[j];
+                    if (glm::length(other.origPos - target) < 1e-4f &&
+                        glm::length(other.origPos + other.slideDir * other.maxDist - bv.origPos) < 1e-4f) {
+                        float half = bv.maxDist * 0.5f - 1e-4f;
+                        if (half < globalMax) globalMax = half;
+                    }
+                }
+            }
+        }
 
         for (auto& bv : g_bevelData) {
-            float clampedW = glm::min(g_bevelWidth, bv.maxDist * 0.49f);
+            float maxW = bv.maxDist * clampFactor;
+            if (g_bevelClamp && globalMax < maxW) maxW = globalMax;
+            float clampedW = glm::min(g_bevelWidth, maxW);
             mesh.verts[bv.vertIdx].pos = bv.origPos + bv.slideDir * clampedW;
         }
     }
@@ -1826,8 +1898,15 @@ static void render_viewport()
             do { fv.push_back(mesh.hedges[cur].vertex); cur = mesh.hedges[cur].next; }
             while (cur != start && (int)fv.size() < 64);
             if (fv.size() < 3) continue;
-            glm::vec3 fn = glm::cross(mesh.verts[fv[1]].pos - mesh.verts[fv[0]].pos,
-                                       mesh.verts[fv[2]].pos - mesh.verts[fv[0]].pos);
+            // Newell's method for robust normal (handles coincident verts at bevel width=0)
+            glm::vec3 fn(0);
+            for (int j = 0; j < (int)fv.size(); j++) {
+                auto& cur = mesh.verts[fv[j]].pos;
+                auto& nxt = mesh.verts[fv[(j + 1) % fv.size()]].pos;
+                fn.x += (cur.y - nxt.y) * (cur.z + nxt.z);
+                fn.y += (cur.z - nxt.z) * (cur.x + nxt.x);
+                fn.z += (cur.x - nxt.x) * (cur.y + nxt.y);
+            }
             glm::vec3 fc(0);
             for (int j : fv) fc += mesh.verts[j].pos;
             fc /= (float)fv.size();
